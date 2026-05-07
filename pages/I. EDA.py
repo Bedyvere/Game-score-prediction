@@ -1,802 +1,721 @@
-import streamlit as st
+import os
+import re
+from itertools import combinations
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
-from pandas.plotting import scatter_matrix
-import os
-from itertools import combinations
-import numpy as np
+import streamlit as st
 from sklearn.preprocessing import OrdinalEncoder
 
-# Need to conclude data visualization code
-
-#############################################
 
 st.markdown("# Practical Applications of Machine Learning (PAML)")
-
-#############################################
-
 st.markdown("### Game Score Prediction and Critics Analysis")
+st.markdown("# Exploratory Dataset Analysis")
 
-#############################################
 
-st.markdown('# Exploratory Dataset Analysis')
+DATASET_DIR = os.path.join(os.path.dirname(__file__), "..", "datasets")
+DEFAULT_DATASET_PATH = os.path.abspath(
+    os.path.join(DATASET_DIR, "merged_grivg_data.csv")
+)
 
-#############################################
+SESSION_DATA_KEY = "game_df"
+LEGACY_SESSION_DATA_KEY = "house_df"
+SESSION_RAW_KEY = "raw_game_df"          # cleaned original dataset
+SESSION_ORIGINAL_KEY = "original_game_df" # before cleaning
 
-st.markdown('### Import Dataset')
 
-# Helper Function
-def load_dataset(filepath):
-    """
-    This function uses the filepath (string) a .csv file locally on a computer 
-    to import a dataset with pandas read_csv() function. Then, store the 
-    dataset in session_state.
+@st.cache_data
+def read_csv_data(source):
+    return pd.read_csv(source)
 
-    Input: data is the filename or path to file (string)
-    Output: pandas dataframe df
-    """
-    data = pd.read_csv(filepath)
-    st.session_state['house_df'] = data
-    return data
 
-# Helper function
-def sidebar_filter(df, chart_type, x=None, y=None):
-    """
-    This function renders the feature selection sidebar 
+def clean_column_name(column):
+    """Make column names easier to use in code."""
+    column = str(column).strip()
+    column = re.sub(r"[\s\-]+", "_", column)
+    column = re.sub(r"[^0-9a-zA-Z_]", "", column)
+    column = re.sub(r"_+", "_", column)
+    return column.strip("_")
 
-    Input: 
-        - df: pandas dataframe containing dataset
-        - chart_type: the type of selected chart
-        - x: features
-        - y: targets
-    Output: 
-        - list of sidebar filters on features
-    """
-    df=df.dropna()
-    side_bar_data = []
 
-    select_columns = []
-    if (x is not None):
-        select_columns.append(x)
-    if (y is not None):
-        select_columns.append(y)
-    if (x is None and y is None):
-        select_columns = list(df.select_dtypes(include='number').columns)
+def parse_percentage(series):
+    """Convert values like '45%' into 0.45 for modeling."""
+    cleaned = (
+        series.astype(str)
+        .str.replace("%", "", regex=False)
+        .str.strip()
+        .replace({"": np.nan, "nan": np.nan, "None": np.nan, "Unknown": np.nan})
+    )
+    values = pd.to_numeric(cleaned, errors="coerce")
 
-    for idx, feature in enumerate(select_columns):
-        try:
-            f = st.sidebar.slider(
-                str(feature),
-                float(df[str(feature)].min()),
-                float(df[str(feature)].max()),
-                (float(df[str(feature)].min()), float(df[str(feature)].max())),
-                key=chart_type+str(idx)
-            )
-        except Exception as e:
-            print(e)
-        side_bar_data.append(f)
-    return side_bar_data
+    # The GRIVG dataset stores percentages like 18%, 56%, etc.
+    # For ML, 0.18 is usually easier to use than 18.
+    if values.dropna().max() > 1:
+        values = values / 100
+    return values
 
-# Helper Function
-def compute_correlation(df, features):
-    """
-    This function computes pair-wise correlation coefficents of X and render summary strings
 
-    Input: 
-        - df: pandas dataframe 
-        - features: a list of feature name (string), e.g. ['age','height']
-    Output: 
-        - correlation: correlation coefficients between one or more features
-        - summary statements: a list of summary strings where each of it is in the format: 
-            '- Features X and Y are {strongly/weakly} {positively/negatively} correlated: {correlation value}'
-    """
-    correlation = df[features].corr()
-    feature_pairs = combinations(features, 2)
-    cor_summary_statements = []
+def preprocess_merged_dataset(df):
+    """Basic automatic cleaning for the merged GRIVG dataset."""
+    cleaned = df.copy()
 
-    for f1, f2 in feature_pairs:
-        cor = correlation[f1][f2]
-        summary = '- Features %s and %s are %s %s correlated: %.2f' % (
-            f1, f2, 'strongly' if cor > 0.5 else 'weakly', 'positively' if cor > 0 else 'negatively', cor)
-        st.write(summary)
-        cor_summary_statements.append(summary)
+    # Clean column names first, so later code can safely use underscore names.
+    cleaned.columns = [clean_column_name(col) for col in cleaned.columns]
 
-    return correlation, cor_summary_statements
+    # Remove empty columns and useless exported index columns.
+    cleaned = cleaned.dropna(axis=1, how="all")
+    cleaned = cleaned.loc[:, ~cleaned.columns.str.startswith("Unnamed")]
 
-# Helper Function
-def summarize_missing_data(df, top_n=3):
-    """
-    This function summarizes missing values in the dataset
+    # Clean extra spaces inside text values.
+    for column in cleaned.select_dtypes(include="object").columns:
+        cleaned[column] = cleaned[column].astype(str).str.strip()
+        cleaned[column] = cleaned[column].replace(
+            {"": np.nan, "nan": np.nan, "None": np.nan, "Unknown": np.nan}
+        )
 
-    Input: 
-        - df: the pandas dataframe
-        - top_n: top n features with missing values, default value is 3
-    Output: 
-        - a dictionary containing the following keys and values: 
-            - 'num_categories': counts the number of features that have missing values
-            - 'average_per_category': counts the average number of missing values across features
-            - 'total_missing_values': counts the total number of missing values in the dataframe
-            - 'top_missing_categories': lists the top n features with missing values
-    """
-    out_dict = {'num_categories': 0,
-                'average_per_category': 0,
-                'total_missing_values': 0,
-                'top_missing_categories': []}
+    # Convert columns that should be numeric.
+    numeric_columns = [
+        "Playable",
+        "Sexualization",
+        "Protagonist",
+        "Protagonist_Non_Male",
+        "Relevant_males",
+        "Relevant_no_males",
+        "Total_team",
+        "female_team",
+        "Metacritic",
+        "Destructoid",
+        "IGN",
+        "GameSpot",
+        "Avg_Reviews",
+        "Sexualized_clothing",
+        "Trophy",
+        "Damsel_in_Distress",
+        "Sexualized_Cutscenes",
+        "Total",
+        "PEGI",
+    ]
+    for column in numeric_columns:
+        if column in cleaned.columns:
+            cleaned[column] = pd.to_numeric(cleaned[column], errors="coerce")
 
-    # Used for top categories with missing data
-    missing_column_counts = df[df.columns[df.isnull().any()]].isnull().sum()
-    max_idxs = np.argsort(missing_column_counts.to_numpy())[::-1][:top_n]
+    # Convert percentage columns into 0-1 numeric values.
+    if "Percentage_non_male" in cleaned.columns:
+        cleaned["Percentage_non_male_num"] = parse_percentage(
+            cleaned["Percentage_non_male"]
+        )
+    if "Team_percentage" in cleaned.columns:
+        cleaned["Team_percentage_num"] = parse_percentage(cleaned["Team_percentage"])
 
-    # Compute missing statistics
-    out_dict['num_categories'] = df.isna().any(axis=0).sum()
-    out_dict['average_per_category'] = df.isna().sum().sum()/len(df.columns)
-    out_dict['total_missing_values'] = df.isna().sum().sum()
-    out_dict['top_missing_categories'] = df.columns[max_idxs[:top_n]].to_numpy()
+    # Create simple 0/1 flags.
+    if "Customizable_main" in cleaned.columns:
+        cleaned["Customizable_main_flag"] = cleaned["Customizable_main"].map(
+            {"Yes": 1, "No": 0, "Non_Binary": 1, "Non-Binary": 1}
+        )
 
-    # Display missing statistics
-    st.markdown('Number of categories with missing values: {0:.2f}'.format(
-        out_dict['num_categories']))
-    st.markdown('Average number of missing values per category: {0:.2f}'.format(
-        out_dict['average_per_category']))
-    st.markdown('Total number of missing values: {0:.2f}'.format(
-        out_dict['total_missing_values']))
-    st.markdown('Top {} categories with most missing values: {}'.format(
-        top_n, out_dict['top_missing_categories']))
-    return out_dict
+    if "Romantic_Interest" in cleaned.columns:
+        cleaned["Romantic_Interest_flag"] = cleaned["Romantic_Interest"].map(
+            {"Yes": 1, "Opt": 1, "No": 0}
+        )
 
-# Helper Function
-def remove_features(df,removed_features):
-    """
-    Remove the features in removed_features (list) from the input pandas dataframe df. 
+    # Create Age_numeric from exact ages first, then use Age_range as a backup.
+    if "Age" in cleaned.columns:
+        cleaned["Age_numeric"] = pd.to_numeric(cleaned["Age"], errors="coerce")
 
-    Input: df is dataset in pandas dataframe
-    Output: pandas dataframe df
-    """
-    X = df.copy()
-    X  = X.drop(removed_features, axis=1)
-    st.session_state['house_df'] = X
-    return X
+    if "Age_range" in cleaned.columns:
+        age_label_map = {
+            "Infant": 3,
+            "Child": 10,
+            "Teenager": 16,
+            "Young_adult": 21,
+            "Young_Adult": 21,
+            "Young adult": 21,
+            "Adult": 30,
+            "Middle_aged": 50,
+            "Middle_Aged": 50,
+            "Middle-aged": 50,
+            "Elderly": 70,
+        }
+        if "Age_numeric" not in cleaned.columns:
+            cleaned["Age_numeric"] = np.nan
+        cleaned["Age_numeric"] = cleaned["Age_numeric"].fillna(
+            cleaned["Age_range"].map(age_label_map)
+        )
 
-# Helper Function
-def remove_nans(df):
-    """
-    This function removes all NaN values in the dataframe
+    # Create release year and month.
+    if "Release" in cleaned.columns:
+        release_dt = pd.to_datetime(cleaned["Release"], format="%b-%y", errors="coerce")
+        cleaned["Release_Date"] = release_dt
+        cleaned["Release_Year"] = release_dt.dt.year
+        cleaned["Release_Month"] = release_dt.dt.month
 
-    Input: 
-        - df: pandas dataframe
-    Output: 
-        - df: updated df with no Nan observations
-    """
-    # Remove obs with nan values
-    df = df.dropna()
-    # df.to_csv('remove_nans.csv',index= False)
-    st.session_state['house_df'] = df
-    return df
+    return cleaned
 
-# Helper Function
-def impute_dataset(df, impute_method):
-    """
-    Impute the dataset df with imputation method impute_method 
-    including mean, median, zero values or drop Nan values in 
-    the dataset (all numeric and string columns).
 
-    Input: 
-    - df is dataset in pandas dataframe
-    - impute_method = {'Zero', 'Mean', 'Median','DropNans'}
-    Output: pandas dataframe df
-    """
-    df=df.dropna()
-    X = df.copy()
-    nan_colns = X.columns[X.isna().any()].tolist()
-    numeric_columns = list(X.select_dtypes(['float','int']).columns)
-    if impute_method == 'Zero':
-        # X = X.fillna(0)
-        for col in nan_colns: 
-            if(col in numeric_columns):
-                X[col].fillna(0, inplace=True)
-    elif impute_method == 'Mean':
-        for col in nan_colns: 
-            if(col in numeric_columns):
-                X[col].fillna(value=X[col].mean(), inplace=True)
-    elif impute_method == 'Median':
-        for col in nan_colns:
-            if(col in numeric_columns):
-                X[col].fillna(value=X[col].median(), inplace=True)
-    elif impute_method == 'DropNans':
-        data_size1 = X.size
-        X = X.dropna()
-        data_size2 = X.size
-        st.write('%d values removed from the dataset' %(np.abs(data_size2-data_size1)))
-    st.session_state['house_df'] = X
-    return X
+def load_default_dataset():
+    original_df = read_csv_data(DEFAULT_DATASET_PATH)
+    cleaned_df = preprocess_merged_dataset(original_df)
+    st.session_state[SESSION_ORIGINAL_KEY] = original_df.copy()
+    st.session_state[SESSION_RAW_KEY] = cleaned_df.copy()
+    st.session_state[SESSION_DATA_KEY] = cleaned_df.copy()
+    st.session_state[LEGACY_SESSION_DATA_KEY] = cleaned_df.copy()
+    return cleaned_df
 
-# Helper Function
-def get_outlier_appropriate_columns(df, method='IQR'):
-    """
-    Returns a list of columns appropriate for the specified outlier detection method.
 
-    Filters out:
-    - Non-numeric columns (strings, objects)
-    - Binary columns (one-hot encoded, ≤2 unique values)
-    - For IQR: columns where IQR = 0 (Q1 = Q3)
-    - For STD: columns where std = 0
+def initialize_dataset():
+    if SESSION_DATA_KEY not in st.session_state:
+        return load_default_dataset()
+    st.session_state[LEGACY_SESSION_DATA_KEY] = st.session_state[SESSION_DATA_KEY].copy()
+    return st.session_state[SESSION_DATA_KEY]
 
-    Input:
-        - df: pandas dataframe
-        - method: 'IQR' or 'STD'
-    Output:
-        - appropriate_columns: list of column names suitable for outlier detection
-        - excluded_columns: dict of {column_name: reason} for excluded columns
-    """
-    # Start with numeric columns only
-    numeric_columns = list(df.select_dtypes(include='number').columns)
 
-    appropriate_columns = []
-    excluded_columns = {}
+def set_current_df(df):
+    st.session_state[SESSION_DATA_KEY] = df.copy()
+    st.session_state[LEGACY_SESSION_DATA_KEY] = df.copy()
 
-    for col in numeric_columns:
-        # Skip columns with no data
-        if len(df[col].dropna()) == 0:
-            excluded_columns[col] = "No data (all NaN)"
-            continue
 
-        # Check for binary columns (one-hot encoded or boolean-like)
-        unique_values = df[col].dropna().nunique()
-        if unique_values <= 2:
-            excluded_columns[col] = f"Binary/categorical (only {unique_values} unique values)"
-            continue
+def reset_current_df():
+    st.session_state[SESSION_DATA_KEY] = st.session_state[SESSION_RAW_KEY].copy()
+    st.session_state[LEGACY_SESSION_DATA_KEY] = st.session_state[SESSION_RAW_KEY].copy()
 
-        # Method-specific checks
-        if method == 'IQR':
-            Q1 = np.percentile(df[col].dropna(), 25)
-            Q3 = np.percentile(df[col].dropna(), 75)
-            IQR = Q3 - Q1
-            if IQR == 0:
-                excluded_columns[col] = f"IQR = 0 (Q1 = Q3 = {Q1:.4f}), >50% same value"
-                continue
-        else:  # STD method
-            std_val = df[col].dropna().std()
-            if std_val == 0:
-                excluded_columns[col] = "Standard deviation = 0 (all identical values)"
-                continue
 
-        appropriate_columns.append(col)
-
-    return appropriate_columns, excluded_columns
-
-# Helper Function
-def remove_outliers(df, features, outlier_removal_method=None):
-    """
-    This function removes the outliers of the given feature(s)
-
-    Input:
-        - df: pandas dataframe
-        - feature: the feature(s) to remove outliers
-    Output:
-        - dataset: the updated data that has outliers removed
-        - lower_bound: the lower 25th percentile of the data
-        - upper_bound: the upper 25th percentile of the data
-    """
-    df=df.dropna()
-    dataset = df.copy()
-
-    for feature in features:
-        # Check if dataset is empty before processing
-        if len(dataset) == 0:
-            st.warning(f'Dataset is empty. Cannot remove outliers from remaining features.')
-            break
-
-        # Safety check: Skip non-numeric columns
-        if not np.issubdtype(dataset[feature].dtype, np.number):
-            st.warning(f'Skipping feature {feature}: Not a numeric column (dtype: {dataset[feature].dtype}). '
-                      f'Outlier detection only works on numeric data.')
-            continue
-
-        # Safety check: Skip binary/categorical columns (≤2 unique values)
-        unique_count = dataset[feature].dropna().nunique()
-        if unique_count <= 2:
-            st.warning(f'Skipping feature {feature}: Binary/categorical column (only {unique_count} unique values). '
-                      f'Outlier detection is not appropriate for binary or one-hot encoded features.')
-            continue
-
-        lower_bound = dataset[feature].max()
-        upper_bound = dataset[feature].min()
-
-        if(outlier_removal_method =='IQR'): # IQR method
-            if (feature in dataset.columns):
-                dataset = dataset.dropna()
-                # Check again after dropna
-                if len(dataset) == 0:
-                    st.warning(f'Dataset is empty after dropping NaN values. Cannot process feature {feature}.')
-                    break
-                Q1 = np.percentile(dataset[feature], 25, axis=0)
-                Q3 = np.percentile(dataset[feature], 75, axis=0)
-                IQR = Q3 - Q1
-
-                # Skip feature if IQR is 0 (cannot detect outliers)
-                if IQR == 0:
-                    st.warning(f'Skipping feature {feature}: IQR = 0 (Q1 = Q3 = {Q1:.4f}). '
-                              f'This typically occurs with discrete/categorical features where >50% of values are the same. '
-                              f'IQR-based outlier detection is not appropriate for this feature.')
-                    continue
-
-                upper_bound = Q3 + 1.5*IQR
-                lower_bound = Q1 - 1.5*IQR
-        else: # Standard deviation methods
-            if len(dataset) == 0:
-                st.warning(f'Dataset is empty. Cannot process feature {feature}.')
-                break
-
-            # Check for zero standard deviation
-            std_val = dataset[feature].std()
-            if std_val == 0:
-                st.warning(f'Skipping feature {feature}: Standard deviation = 0. '
-                          f'All values are identical, so outlier detection is not applicable.')
-                continue
-
-            upper_bound = dataset[feature].mean() + 3*std_val #mean + 3*std
-            lower_bound = dataset[feature].mean() - 3*std_val #mean - 3*std
-
-        dataset_size1 = dataset.size
-        dataset = dataset[dataset[feature] > lower_bound]
-        dataset = dataset[dataset[feature] < upper_bound]
-        dataset_size2 = dataset.size
-        st.write('%s: %d outliers were removed from feature %s in the dataset' % (outlier_removal_method,dataset_size1-dataset_size2, feature))
-
-        # Warn user if all data was removed
-        if len(dataset) == 0:
-            st.warning(f'All rows were removed after processing feature {feature}. Consider adjusting outlier removal parameters.')
-
-    st.session_state['house_df'] = dataset
-    return dataset
-
-# Helper Function
-def one_hot_encode_feature(df, features):
-    """
-    This function performs one-hot-encoding on the given features
-
-    Input: 
-        - df: the pandas dataframe
-        - features: the feature(s) to perform one-hot-encoding
-    Output: 
-        - df: dataframe with one-hot-encoded feature
-    """
-    df=df.dropna()
-
-    for feat in features:
-        encoded_feature_df = pd.DataFrame({feat: df[feat]})
-        df = pd.get_dummies(df, columns=[feat])
-        df = pd.concat([df, encoded_feature_df], axis=1)
-    st.write('Features {} has been one-hot encoded.'.format(features))
-
-    st.session_state['house_df'] = df
-    return df
-
-# Helper Function
-def integer_encode_feature(df, features):
-    """
-    This function performs integer-encoding on the given features
-
-    Input: 
-        - df: the pandas dataframe
-        - features: the feature(s) to perform integer-encoding
-    Output: 
-        - df: dataframe with integer-encoded feature
-    """
-    df=df.dropna()
-    for feat in features:
-        enc = OrdinalEncoder()
-        df[[feat+'_int']] = enc.fit_transform(df[[feat]])
-    st.write('Feature {} has been integer encoded.'.format(features))
-    
-    st.session_state['house_df'] = df
-    return df
-
-# Helper Function
-def create_feature(df, math_select, math_feature_select, new_feature_name):
-    """
-    Create a new feature with name new_feature_name in dataset df with the 
-    mathematical operation math_select (string) on features math_feature_select (list). 
-
-    Input: 
-        - df: the pandas dataframe
-        - math_select: the math operation to perform on the selected features
-        - math_feature_select: the features to be performed on
-        - new_feature_name: the name for the new feature
-    Output: 
-        - df: the udpated dataframe
-    """
-    df = df.dropna()
-    if (len(math_feature_select) == 1): 
-        if(math_select == 'square root'):  # sqrt
-            df[new_feature_name] = np.sqrt(df[math_feature_select])
-        if(math_select == 'ceil'):  # ceil
-            df[new_feature_name] = np.ceil(df[math_feature_select])
-        if(math_select == 'floor'):  # floor
-            df[new_feature_name] = np.floor(df[math_feature_select])
-    else:
-        if (math_select == 'add'):
-            df[new_feature_name] = df[math_feature_select[0]] + df[math_feature_select[1]]
-        elif (math_select == 'subtract'):
-            df[new_feature_name] = df[math_feature_select[0]] - df[math_feature_select[1]]
-        elif (math_select == 'multiply'):
-            df[new_feature_name] = df[math_feature_select[0]] * df[math_feature_select[1]]
-        elif (math_select == 'divide'):
-            df[new_feature_name] = df[math_feature_select[0]] / df[math_feature_select[1]]
-    st.session_state['house_df'] = df
-    return df
-
-# Helper Function
-def compute_descriptive_stats(df, stats_feature_select, stats_select):
-    """
-    Compute descriptive statistics stats_select on a feature stats_feature_select 
-    in df. Statistics stats_select include mean, median, max, and min. Return 
-    the results in an output string out_str and dictionary out_dict (dictionary).
-
-    Input: 
-    - df: the pandas dataframe
-    - stats_feature_select: list of feaures to computer statistics on
-    - stats_select: list of mathematical opations
-    Output: 
-    - output_str: string used to display feature statistics
-    - out_dict: dictionary of feature statistics
-    """
-    output_str=''
-    out_dict = {
-        'mean': None,
-        'median': None,
-        'max': None,
-        'min': None
+def summarize_missing_data(df):
+    missing = df.isna().sum()
+    missing = missing[missing > 0].sort_values(ascending=False)
+    return {
+        "num_columns_with_missing": int((df.isna().sum() > 0).sum()),
+        "total_missing_values": int(df.isna().sum().sum()),
+        "top_missing": missing.head(10),
     }
-    df=df.dropna()
-    X = df.copy()
-    for f in stats_feature_select:
-        output_str = str(f)
-        for s in stats_select:
-            if(s=='Mean'):
-                mean = round(X[f].mean(), 2)
-                output_str = output_str + ' mean: {0:.2f}    |'.format(mean)
-                out_dict['mean'] = mean
-            elif(s=='Median'):
-                median = round(X[f].median(), 2)
-                output_str = output_str + ' median: {0:.2f}    |'.format(median)
-                out_dict['median'] = median
-            elif(s=='Max'):
-                max = round(X[f].max(), 2)
-                output_str = output_str + ' max: {0:.2f}    |'.format(max)
-                out_dict['max'] = max
-            elif(s=='Min'):
-                min = round(X[f].min(), 2)
-                output_str = output_str + ' min: {0:.2f}    |'.format(min)
-                out_dict['min'] = min
-        st.write(output_str)
-    return output_str, out_dict
 
-# Helper Function
-def scale_features(df, features, scaling_method): 
-    """
-    Use the scaling_method to transform numerical features in the dataset df. 
 
-    Input: 
-        - df: the pandas dataframe
-        - features: list of features
-        - scaling method is a string; Options include {'Standardarization', 'Normalization', 'Log'}
-    Output: 
-        - Standarization: X_new = (X - mean)/Std
-        - Normalization: X_new = (X - X_min)/(X_max - X_min)
-        - Log: X_log = log(X)
-    """
-    df = df.dropna()
-    X = df.copy()
-    for f in features:
-        if(scaling_method == 'Standardarization'):
-            X[f+'_std'] = (X[f] - X[f].mean()) / X[f].std()
-            st.write('Feature {} is scaled using {}'.format(f, scaling_method))
-        elif(scaling_method == 'Normalization'):
-            X[f+'_norm'] = (X[f] - X[f].min()) / (X[f].max() - X[f].min())  
-            st.write('Feature {} is scaled using {}'.format(f, scaling_method))
-        elif(scaling_method == 'Log'):
-            X[f+'_log'] = np.log2(X[f])
-            X[X[f+'_log']<0] = 0 # Check for -inf
-            st.write('Feature {} is scaled using {}'.format(f, scaling_method))
+def compute_correlation(df, features):
+    if len(features) < 2:
+        return None, []
+    correlation = df[features].corr()
+    summary = []
+    for f1, f2 in combinations(features, 2):
+        cor = correlation.loc[f1, f2]
+        if pd.isna(cor):
+            continue
+        strength = "strongly" if abs(cor) >= 0.5 else "weakly"
+        direction = "positively" if cor >= 0 else "negatively"
+        summary.append(f"- {f1} and {f2} are {strength} {direction} correlated: {cor:.2f}")
+    return correlation, summary
+
+
+def remove_features(df, removed_features):
+    if not removed_features:
+        return df
+    return df.drop(columns=removed_features, errors="ignore")
+
+
+def impute_dataset(df, numeric_method, categorical_fill_value="Missing"):
+    updated = df.copy()
+    numeric_columns = updated.select_dtypes(include="number").columns
+    categorical_columns = updated.select_dtypes(exclude="number").columns
+
+    if numeric_method == "Zero":
+        updated[numeric_columns] = updated[numeric_columns].fillna(0)
+    elif numeric_method == "Mean":
+        updated[numeric_columns] = updated[numeric_columns].fillna(updated[numeric_columns].mean())
+    elif numeric_method == "Median":
+        updated[numeric_columns] = updated[numeric_columns].fillna(updated[numeric_columns].median())
+    elif numeric_method == "Drop Rows":
+        updated = updated.dropna()
+
+    if numeric_method != "Drop Rows" and len(categorical_columns) > 0:
+        updated[categorical_columns] = updated[categorical_columns].fillna(categorical_fill_value)
+
+    return updated
+
+
+def get_outlier_appropriate_columns(df):
+    candidates = []
+    excluded = {}
+    for column in df.select_dtypes(include="number").columns:
+        series = df[column].dropna()
+        if len(series) == 0:
+            excluded[column] = "all NaN"
+            continue
+        if series.nunique() <= 2:
+            excluded[column] = "binary or near-binary"
+            continue
+        if series.std() == 0:
+            excluded[column] = "zero variance"
+            continue
+        candidates.append(column)
+    return candidates, excluded
+
+
+def remove_outliers(df, features, method):
+    updated = df.copy()
+    removed_rows = {}
+    for feature in features:
+        series = updated[feature].dropna()
+        if len(series) == 0:
+            continue
+
+        before = len(updated)
+        if method == "IQR":
+            q1 = series.quantile(0.25)
+            q3 = series.quantile(0.75)
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
         else:
-            st.write('scaling_method is invalid.')
+            mean = series.mean()
+            std = series.std()
+            if std == 0:
+                continue
+            lower = mean - 3 * std
+            upper = mean + 3 * std
 
-    st.session_state['house_df'] = X
-    return X
+        updated = updated[(updated[feature].isna()) | ((updated[feature] >= lower) & (updated[feature] <= upper))]
+        removed_rows[feature] = before - len(updated)
 
-###################### FETCH DATASET #######################
-df = None
-if('house_df' in st.session_state):
-    df = st.session_state['house_df']
+    return updated, removed_rows
+
+
+def one_hot_encode_feature(df, features):
+    if not features:
+        return df
+    return pd.get_dummies(df, columns=features, dummy_na=False)
+
+
+def integer_encode_feature(df, features):
+    if not features:
+        return df
+    updated = df.copy()
+    encoder = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+    encoded = encoder.fit_transform(updated[features].fillna("Missing"))
+    for idx, feature in enumerate(features):
+        updated[f"{feature}_int"] = encoded[:, idx].astype(int)
+    return updated
+
+
+def create_feature(df, math_select, math_feature_select, new_feature_name):
+    updated = df.copy()
+    if not new_feature_name:
+        return updated
+
+    if math_select in {"square root", "ceil", "floor"}:
+        feature = math_feature_select[0]
+        if math_select == "square root":
+            updated[new_feature_name] = np.where(
+                updated[feature] >= 0, np.sqrt(updated[feature]), np.nan
+            )
+        elif math_select == "ceil":
+            updated[new_feature_name] = np.ceil(updated[feature])
+        elif math_select == "floor":
+            updated[new_feature_name] = np.floor(updated[feature])
+        return updated
+
+    left_feature, right_feature = math_feature_select
+    if math_select == "add":
+        updated[new_feature_name] = updated[left_feature] + updated[right_feature]
+    elif math_select == "subtract":
+        updated[new_feature_name] = updated[left_feature] - updated[right_feature]
+    elif math_select == "multiply":
+        updated[new_feature_name] = updated[left_feature] * updated[right_feature]
+    elif math_select == "divide":
+        denominator = updated[right_feature].replace(0, np.nan)
+        updated[new_feature_name] = updated[left_feature] / denominator
+    return updated
+
+
+def compute_descriptive_stats(df, features):
+    if not features:
+        return pd.DataFrame()
+    return df[features].describe().T[["mean", "50%", "min", "max", "std"]].rename(
+        columns={"50%": "median"}
+    )
+
+
+def scale_features(df, features, scaling_method):
+    updated = df.copy()
+    for feature in features:
+        series = updated[feature]
+        if scaling_method == "Standardization":
+            std = series.std()
+            updated[f"{feature}_std"] = np.nan if std == 0 else (series - series.mean()) / std
+        elif scaling_method == "Normalization":
+            value_range = series.max() - series.min()
+            updated[f"{feature}_norm"] = np.nan if value_range == 0 else (series - series.min()) / value_range
+        elif scaling_method == "Log1p":
+            updated[f"{feature}_log1p"] = np.where(series >= 0, np.log1p(series), np.nan)
+    return updated
+
+
+def get_categorical_columns(df):
+    return list(df.select_dtypes(include=["object", "category", "bool"]).columns)
+
+
+def show_project_quick_charts(df):
+    st.markdown("### 3. Project-related quick charts")
+    st.caption("These are simple charts connected to our game score and gender representation question.")
+
+    chart_count = 0
+
+    if {"Percentage_non_male_num", "Avg_Reviews"}.issubset(df.columns):
+        fig = px.scatter(
+            df,
+            x="Percentage_non_male_num",
+            y="Avg_Reviews",
+            color="Gender" if "Gender" in df.columns else None,
+            hover_name="Title" if "Title" in df.columns else None,
+            title="Non-male character percentage vs average review score",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        chart_count += 1
+
+    if {"Gender", "Avg_Reviews"}.issubset(df.columns):
+        fig = px.box(
+            df,
+            x="Gender",
+            y="Avg_Reviews",
+            points="outliers",
+            title="Average review score distribution by character gender",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        chart_count += 1
+
+    if {"Release_Year", "Avg_Reviews"}.issubset(df.columns):
+        yearly_score = (
+            df.groupby("Release_Year", as_index=False)["Avg_Reviews"]
+            .mean()
+            .dropna()
+        )
+        fig = px.line(
+            yearly_score,
+            x="Release_Year",
+            y="Avg_Reviews",
+            markers=True,
+            title="Average review score by release year",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        chart_count += 1
+
+    if {"Release_Year", "Percentage_non_male_num"}.issubset(df.columns):
+        yearly_gender = (
+            df.groupby("Release_Year", as_index=False)["Percentage_non_male_num"]
+            .mean()
+            .dropna()
+        )
+        fig = px.line(
+            yearly_gender,
+            x="Release_Year",
+            y="Percentage_non_male_num",
+            markers=True,
+            title="Average non-male character percentage by release year",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        chart_count += 1
+
+    if chart_count == 0:
+        st.info("The current dataset does not include the columns needed for the quick project charts.")
+
+
+st.markdown("### Import Dataset")
+source_option = st.radio(
+    "Select data source",
+    ["Use game data in /datasets", "Upload another CSV"],
+    horizontal=True,
+)
+
+if source_option == "Upload another CSV":
+    uploaded_file = st.file_uploader("Upload a Dataset", type=["csv", "txt"])
+    if uploaded_file is not None:
+        original_df = read_csv_data(uploaded_file)
+        uploaded_df = preprocess_merged_dataset(original_df)
+        st.session_state[SESSION_ORIGINAL_KEY] = original_df.copy()
+        st.session_state[SESSION_RAW_KEY] = uploaded_df.copy()
+        st.session_state[SESSION_DATA_KEY] = uploaded_df.copy()
+        st.session_state[LEGACY_SESSION_DATA_KEY] = uploaded_df.copy()
+        df = st.session_state[SESSION_DATA_KEY]
+    else:
+        st.info("Please upload a CSV file first.")
+        st.stop()
 else:
-    filepath = st.file_uploader('Upload a Dataset', type=['csv', 'txt'])
-    if(filepath):
-        df = load_dataset(filepath)
+    if st.session_state.get("current_source") != "default":
+        load_default_dataset()
+        st.session_state["current_source"] = "default"
+    df = initialize_dataset()
 
-######################### MAIN BODY #########################
+left_control, right_control = st.columns([1, 1])
+with left_control:
+    if st.button("Reset to original cleaned data"):
+        reset_current_df()
+        df = st.session_state[SESSION_DATA_KEY]
+with right_control:
+    st.download_button(
+        "Download current dataset",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name="processed_game_dataset.csv",
+        mime="text/csv",
+    )
 
-######################### EXPLORE DATASET #########################
 
 if df is not None:
-    st.markdown('### 1. Explore Dataset Features')
+    st.markdown("### 1. Dataset Overview")
+    st.write(f"Rows: `{df.shape[0]}` | Columns: `{df.shape[1]}`")
+    st.dataframe(df.head(20), use_container_width=True)
 
-    # Restore dataset if already in memory
-    st.session_state['house_df'] = df
+    missing_summary = summarize_missing_data(df)
+    original_df = st.session_state.get(SESSION_ORIGINAL_KEY)
 
-    # Display dataframe as table
-    st.dataframe(df.describe())
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1.metric("Rows", df.shape[0])
+    metric_col2.metric("Columns", df.shape[1])
+    metric_col3.metric("Missing values", missing_summary["total_missing_values"])
+    metric_col4.metric("Numeric columns", len(df.select_dtypes(include="number").columns))
 
-    ###################### VISUALIZE DATASET #######################
-    st.markdown('### 2. Visualize Features')
+    if original_df is not None:
+        st.markdown("### 2. Cleaning result")
+        clean_col1, clean_col2, clean_col3 = st.columns(3)
+        clean_col1.metric("Rows before cleaning", original_df.shape[0])
+        clean_col2.metric("Columns before cleaning", original_df.shape[1])
+        clean_col3.metric("Columns after cleaning", df.shape[1])
 
-    numeric_columns = list(df.select_dtypes(include='number').columns)
-    #numeric_columns = list(df.select_dtypes(['float','int']).columns)    
-    # Specify Input Parameters
-    st.sidebar.header('Specify Input Parameters')
-
-    # Collect user plot selection
-    st.sidebar.header('Select type of chart')
-    chart_select = st.sidebar.selectbox(
-        label='Type of chart',
-        options=['Scatterplots', 'Lineplots', 'Histogram', 'Boxplot']
-    )
-
-    # Draw plots
-    if chart_select == 'Scatterplots':
-        try:
-            x_values = st.sidebar.selectbox('X axis', options=numeric_columns)
-            y_values = st.sidebar.selectbox('Y axis', options=numeric_columns)
-            side_bar_data = sidebar_filter(
-                df, chart_select, x=x_values, y=y_values)
-            plot = px.scatter(data_frame=df,
-                              x=x_values, y=y_values,
-                              range_x=[side_bar_data[0][0],
-                                       side_bar_data[0][1]],
-                              range_y=[side_bar_data[1][0],
-                                       side_bar_data[1][1]])
-            st.write(plot)
-        except Exception as e:
-            print(e)
-    if chart_select == 'Histogram':
-        try:
-            x_values = st.sidebar.selectbox('X axis', options=numeric_columns)
-            side_bar_data = sidebar_filter(df, chart_select, x=x_values)
-            plot = px.histogram(data_frame=df,
-                                x=x_values,
-                                range_x=[side_bar_data[0][0],
-                                         side_bar_data[0][1]])
-            st.write(plot)
-        except Exception as e:
-            print(e)
-    if chart_select == 'Lineplots':
-        try:
-            x_values = st.sidebar.selectbox('X axis', options=numeric_columns)
-            y_values = st.sidebar.selectbox('Y axis', options=numeric_columns)
-            side_bar_data = sidebar_filter(
-                df, chart_select, x=x_values, y=y_values)
-            plot = px.line(df,
-                           x=x_values,
-                           y=y_values,
-                           range_x=[side_bar_data[0][0],
-                                    side_bar_data[0][1]],
-                           range_y=[side_bar_data[1][0],
-                                    side_bar_data[1][1]])
-            st.write(plot)
-        except Exception as e:
-            print(e)
-    if chart_select == 'Boxplot':
-        try:
-            x_values = st.sidebar.selectbox('X axis', options=numeric_columns)
-            side_bar_data = sidebar_filter(df, chart_select, x=x_values)
-            plot = px.box(df,
-                          x=x_values,
-                          range_x=[side_bar_data[0][0],
-                                   side_bar_data[0][1]])
-            st.write(plot)
-        except Exception as e:
-            print(e)
-
-    # Display original dataframe
-    st.markdown('## 3. View initial data with missing values or invalid inputs')
-    st.dataframe(df)
-
-    numeric_columns = list(df.select_dtypes(['float','int']).columns)
-
-    # Show summary of missing values including 
-    missing_data_summary = summarize_missing_data(df)
-
-    # Remove param
-    st.markdown('### 4. Remove irrelevant/useless features')
-    removed_features = st.multiselect(
-        'Select features',
-        df.columns,
-    )
-    df = remove_features(df, removed_features)
-
-    ########
-    # Display updated dataframe
-    st.dataframe(df)
-
-    # Impute features
-    st.markdown('### 5. Impute data')
-    st.markdown('Transform missing values to 0, mean, or median')
-
-    # Use selectbox to provide impute options {'Zero', 'Mean', 'Median'}
-    impute_method = st.selectbox(
-        'Select imputation method',
-        ('Zero', 'Mean', 'Median','DropNans')
-    )
-
-    # Call impute_dataset function to resolve data handling/cleaning problems
-    df = impute_dataset(df, impute_method)
-    
-    # Display updated dataframe
-    st.markdown('### Result of the imputed dataframe')
-    st.dataframe(df)
-
-############################################# PREPROCESS DATA #############################################
-    # Handling Text and Categorical Attributes
-    st.markdown('### 6. Handling Text and Categorical Attributes')
-    string_columns = list(df.select_dtypes(['object']).columns)
-
-    int_col, one_hot_col = st.columns(2)
-
-    # Perform Integer Encoding
-    with (int_col):
-        text_feature_select_int = st.multiselect(
-            'Select text features for Integer encoding',
-            string_columns,
+    with st.expander("Data types and missing values"):
+        dtype_df = pd.DataFrame(
+            {
+                "dtype": df.dtypes.astype(str),
+                "missing_count": df.isna().sum(),
+                "missing_rate": (df.isna().mean() * 100).round(2),
+            }
         )
-        if (text_feature_select_int and st.button('Integer Encode feature')):
-            df = integer_encode_feature(df, text_feature_select_int)
-    
-    # Perform One-hot Encoding
-    with (one_hot_col):
-        text_feature_select_onehot = st.multiselect(
-            'Select text features for One-hot encoding',
-            string_columns,
-        )
-        if (text_feature_select_onehot and st.button('One-hot Encode feature')):
-            df = one_hot_encode_feature(df, text_feature_select_onehot)
+        st.dataframe(dtype_df, use_container_width=True)
+        if not missing_summary["top_missing"].empty:
+            st.write("Top columns with missing values")
+            st.dataframe(
+                missing_summary["top_missing"].rename("missing_count").to_frame(),
+                use_container_width=True,
+            )
 
-    # Show updated dataset
-    st.write(df)
-
-    # Sacling features
-    st.markdown('### 7. Feature Scaling')
-    st.markdown('Use standardarization or normalization to scale features')
-
-    # Use selectbox to provide impute options {'Standardarization', 'Normalization', 'Log'}
-    scaling_method = st.selectbox(
-        'Select feature scaling method',
-        ('Standardarization', 'Normalization', 'Log')
-    )
-
-    numeric_columns = list(df.select_dtypes(['float','int']).columns)
-    scale_features_select = st.multiselect(
-        'Select features to scale',
-        numeric_columns,
-    )
-
-    if (st.button('Scale Features')):
-        # Call scale_features function to scale features
-        if(scaling_method and scale_features_select):
-            df = scale_features(df, scale_features_select, scaling_method)
-
-    # Display updated dataframe
-    st.dataframe(df)
-
-    # Create New Features
-    st.markdown('## 8. Create New Features')
+    st.markdown("### Automatic preprocessing applied for game data")
     st.markdown(
-        'Create new features by selecting two features below and selecting a mathematical operator to combine them.')
-    math_select = st.selectbox(
-        'Select a mathematical operation',
-        ['add', 'subtract', 'multiply', 'divide', 'square root', 'ceil', 'floor'],
+        """
+        - Removed fully empty / `Unnamed` columns
+        - Cleaned column names into simple underscore style
+        - Trimmed column names and string values
+        - Converted review and indicator columns to numeric
+        - Created `Percentage_non_male_num` and `Team_percentage_num` as 0-1 numeric values
+        - Created `Age_numeric`, `Release_Year`, and `Release_Month`
+        - Created binary flags for `Customizable_main` and `Romantic_Interest`, with `Opt` counted as 1
+        """
     )
 
-    numeric_columns = list(df.select_dtypes(['float','int']).columns)
-    if (math_select):
-        if (math_select == 'square root' or math_select == 'ceil' or math_select == 'floor'):
-            math_feature_select = st.multiselect(
-                'Select features for feature creation',
-                numeric_columns,
-            )
-            sqrt = np.sqrt(df[math_feature_select])
-            if (math_feature_select):
-                new_feature_name = st.text_input('Enter new feature name')
-                if (st.button('Create new feature')):
-                    if (new_feature_name):
-                        df = create_feature(
-                            df, math_select, math_feature_select, new_feature_name)
-                        st.write(df)
-        else:
-            math_feature_select1 = st.selectbox(
-                'Select feature 1 for feature creation',
-                numeric_columns,
-            )
-            math_feature_select2 = st.selectbox(
-                'Select feature 2 for feature creation',
-                numeric_columns,
-            )
-            if (math_feature_select1 and math_feature_select2):
-                new_feature_name = st.text_input('Enter new feature name')
-                if (st.button('Create new feature')):
-                    df = create_feature(df, math_select, [
-                                        math_feature_select1, math_feature_select2], new_feature_name)
-                    st.write(df)
+    show_project_quick_charts(df)
 
-    st.markdown('### 9. Inspect Features for outliers')
-    outlier_feature_select = None
+    st.markdown("### 4. Custom visualizations")
+    numeric_columns = list(df.select_dtypes(include="number").columns)
+    categorical_columns = get_categorical_columns(df)
 
-    outlier_method_select = st.selectbox(
-        'Select outlier detection method',
-        ['IQR', 'STD']
+    st.sidebar.header("Visualization Controls")
+    chart_select = st.sidebar.selectbox(
+        "Type of chart",
+        ["Scatter", "Histogram", "Box", "Bar"],
     )
 
-    # Get columns appropriate for the selected method
-    appropriate_columns, excluded_columns = get_outlier_appropriate_columns(df, outlier_method_select)
+    if numeric_columns:
+        if chart_select == "Scatter":
+            x_axis = st.sidebar.selectbox("X axis", numeric_columns, key="scatter_x")
+            y_axis = st.sidebar.selectbox("Y axis", numeric_columns, key="scatter_y")
+            color_axis = st.sidebar.selectbox("Color by", [None] + categorical_columns, key="scatter_color")
+            fig = px.scatter(df, x=x_axis, y=y_axis, color=color_axis, hover_data=df.columns)
+            st.plotly_chart(fig, use_container_width=True)
 
-    # Show excluded columns in an expander for transparency
-    if excluded_columns:
-        with st.expander(f"⚠️ {len(excluded_columns)} columns excluded from {outlier_method_select} outlier detection"):
-            st.write("The following columns are not appropriate for outlier detection:")
-            for col, reason in excluded_columns.items():
-                st.write(f"- **{col}**: {reason}")
+        if chart_select == "Histogram":
+            x_axis = st.sidebar.selectbox("Feature", numeric_columns, key="hist_x")
+            color_axis = st.sidebar.selectbox("Color by", [None] + categorical_columns, key="hist_color")
+            fig = px.histogram(df, x=x_axis, color=color_axis, marginal="box", nbins=30)
+            st.plotly_chart(fig, use_container_width=True)
 
-    if not appropriate_columns:
-        st.warning(f"No columns are appropriate for {outlier_method_select} outlier detection. "
-                  "This may occur if all numeric columns are binary/categorical or have zero variance.")
+        if chart_select == "Box":
+            y_axis = st.sidebar.selectbox("Numeric feature", numeric_columns, key="box_y")
+            x_axis = st.sidebar.selectbox("Group by", [None] + categorical_columns, key="box_x")
+            fig = px.box(df, x=x_axis, y=y_axis, points="outliers")
+            st.plotly_chart(fig, use_container_width=True)
+
+        if chart_select == "Bar":
+            if categorical_columns:
+                x_axis = st.sidebar.selectbox("Category", categorical_columns, key="bar_x")
+                value_counts = (
+                    df[x_axis]
+                    .fillna("Missing")
+                    .value_counts()
+                    .reset_index()
+                )
+                value_counts.columns = [x_axis, "count"]
+                fig = px.bar(value_counts, x=x_axis, y="count")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No categorical columns available for bar chart.")
     else:
-        outlier_feature_select = st.multiselect(
-            f'Select feature(s) for {outlier_method_select} outlier removal',
+        st.warning("No numeric columns available for visualization.")
+
+    st.markdown("### 5. Remove irrelevant features")
+    removed_features = st.multiselect("Select columns to drop", df.columns)
+    if st.button("Apply column removal"):
+        df = remove_features(df, removed_features)
+        set_current_df(df)
+        st.success("Selected columns removed from current dataset.")
+
+    st.markdown("### 6. Handle missing values")
+    impute_method = st.selectbox(
+        "Numeric missing-value strategy",
+        ["Mean", "Median", "Zero", "Drop Rows"],
+    )
+    categorical_fill_value = st.text_input(
+        "Fill value for categorical columns",
+        value="Missing",
+    )
+    if st.button("Apply missing-value handling"):
+        df = impute_dataset(df, impute_method, categorical_fill_value)
+        set_current_df(df)
+        st.success("Missing-value handling applied.")
+
+    st.markdown("### 7. Encode categorical features")
+    string_columns = get_categorical_columns(df)
+    encode_col1, encode_col2 = st.columns(2)
+
+    with encode_col1:
+        ordinal_features = st.multiselect(
+            "Columns for integer encoding",
+            string_columns,
+            key="ordinal_features",
+        )
+        if st.button("Apply integer encoding"):
+            df = integer_encode_feature(df, ordinal_features)
+            set_current_df(df)
+            st.success("Integer encoding completed.")
+
+    with encode_col2:
+        one_hot_features = st.multiselect(
+            "Columns for one-hot encoding",
+            string_columns,
+            key="one_hot_features",
+        )
+        if st.button("Apply one-hot encoding"):
+            df = one_hot_encode_feature(df, one_hot_features)
+            set_current_df(df)
+            st.success("One-hot encoding completed.")
+
+    st.markdown("### 8. Feature scaling")
+    current_numeric_columns = list(df.select_dtypes(include="number").columns)
+    if current_numeric_columns:
+        scale_method = st.selectbox(
+            "Scaling method",
+            ["Standardization", "Normalization", "Log1p"],
+        )
+        scale_features_select = st.multiselect(
+            "Select numeric features to scale",
+            current_numeric_columns,
+        )
+        if st.button("Apply scaling"):
+            df = scale_features(df, scale_features_select, scale_method)
+            set_current_df(df)
+            st.success("Feature scaling completed.")
+    else:
+        st.info("No numeric columns available for scaling.")
+
+    st.markdown("### 9. Create new features")
+    numeric_columns = list(df.select_dtypes(include="number").columns)
+    if numeric_columns:
+        math_select = st.selectbox(
+            "Mathematical operation",
+            ["add", "subtract", "multiply", "divide", "square root", "ceil", "floor"],
+        )
+
+        if math_select in {"square root", "ceil", "floor"}:
+            unary_feature = st.selectbox("Select one numeric feature", numeric_columns, key="unary_feature")
+            new_feature_name = st.text_input("New feature name", key="new_feature_unary")
+            if st.button("Create feature", key="create_unary_feature"):
+                df = create_feature(df, math_select, [unary_feature], new_feature_name)
+                set_current_df(df)
+                st.success("New feature created.")
+        else:
+            math_feature_1 = st.selectbox("Feature 1", numeric_columns, key="math_feature_1")
+            math_feature_2 = st.selectbox("Feature 2", numeric_columns, key="math_feature_2")
+            new_feature_name = st.text_input("New feature name", key="new_feature_binary")
+            if st.button("Create feature", key="create_binary_feature"):
+                df = create_feature(
+                    df,
+                    math_select,
+                    [math_feature_1, math_feature_2],
+                    new_feature_name,
+                )
+                set_current_df(df)
+                st.success("New feature created.")
+    else:
+        st.info("No numeric columns available for feature creation.")
+
+    st.markdown("### 10. Remove outliers")
+    outlier_method = st.selectbox("Outlier detection method", ["IQR", "STD"])
+    appropriate_columns, excluded_columns = get_outlier_appropriate_columns(df)
+    if excluded_columns:
+        with st.expander("Excluded columns"):
+            st.json(excluded_columns)
+
+    if appropriate_columns:
+        outlier_features = st.multiselect(
+            "Select features for outlier removal",
             appropriate_columns,
         )
-        if (outlier_feature_select and st.button('Remove Outliers')):
-            df = remove_outliers(df, outlier_feature_select, outlier_method_select)
-            st.write(df)
+        if st.button("Apply outlier removal"):
+            df, removed_rows = remove_outliers(df, outlier_features, outlier_method)
+            set_current_df(df)
+            if removed_rows:
+                st.write(pd.DataFrame.from_dict(removed_rows, orient="index", columns=["rows_removed"]))
+            st.success("Outlier removal completed.")
+    else:
+        st.info("No numeric columns are suitable for outlier removal.")
 
-    # Descriptive Statistics 
-    st.markdown('### 10. Summary of Descriptive Statistics')
+    st.markdown("### 11. Descriptive statistics")
+    stats_numeric_columns = list(df.select_dtypes(include="number").columns)
+    if stats_numeric_columns:
+        stats_feature_select = st.multiselect(
+            "Select numeric features",
+            stats_numeric_columns,
+            key="stats_features",
+        )
+        stats_df = compute_descriptive_stats(df, stats_feature_select)
+        if not stats_df.empty:
+            st.dataframe(stats_df, use_container_width=True)
+    else:
+        st.info("No numeric columns available for descriptive statistics.")
 
-    stats_numeric_columns = list(df.select_dtypes(['float','int']).columns)
-    stats_feature_select = st.multiselect(
-        'Select features for statistics',
-        stats_numeric_columns,
-    )
+    st.markdown("### 12. Correlation analysis")
+    correlation_numeric_columns = list(df.select_dtypes(include="number").columns)
+    if correlation_numeric_columns:
+        correlation_features = st.multiselect(
+            "Select numeric features for correlation",
+            correlation_numeric_columns,
+            key="correlation_features",
+        )
+        correlation_df, correlation_summary = compute_correlation(df, correlation_features)
+        if correlation_df is not None:
+            heatmap = px.imshow(
+                correlation_df,
+                text_auto=".2f",
+                color_continuous_scale="RdBu_r",
+                zmin=-1,
+                zmax=1,
+                aspect="auto",
+            )
+            st.plotly_chart(heatmap, use_container_width=True)
+            if 2 <= len(correlation_features) <= 6:
+                scatter_fig = px.scatter_matrix(df, dimensions=correlation_features)
+                st.plotly_chart(scatter_fig, use_container_width=True)
+            for line in correlation_summary:
+                st.write(line)
+    else:
+        st.info("No numeric columns available for correlation analysis.")
 
-    stats_select = st.multiselect(
-        'Select statistics to display',
-        ['Mean', 'Median','Max','Min']
-    )
-            
-    # Compute Descriptive Statistics including mean, median, min, max
-    display_stats, _ = compute_descriptive_stats(df, stats_feature_select, stats_select)
-
-    ###################### CORRELATION ANALYSIS #######################
-    st.markdown("### 11. Correlation Analysis")
-    # Collect features for correlation analysis using multiselect
-    numeric_columns = list(df.select_dtypes(['float','int']).columns)
-
-
-    select_features_for_correlation = st.multiselect(
-        'Select features for visualizing the correlation analysis (up to 4 recommended)',
-        numeric_columns,
-    )
-
-    # Compute correlation between selected features
-    correlation, correlation_summary = compute_correlation(
-        df, select_features_for_correlation)
-    st.write(correlation)
-
-    # Display correlation of all feature pairs
-    if select_features_for_correlation:
-        try:
-            fig = scatter_matrix(
-                df[select_features_for_correlation], figsize=(12, 8))
-            st.pyplot(fig[0][0].get_figure())
-        except Exception as e:
-            print(e)
-
-    st.markdown('#### Continue to Preprocess Data')
+    st.markdown("### 13. Current processed dataset")
+    st.dataframe(df, use_container_width=True)
+    st.info("The current processed dataframe has been stored in `st.session_state['game_df']`.")

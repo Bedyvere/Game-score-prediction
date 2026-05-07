@@ -7,6 +7,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 #############################################
 
+SESSION_DATA_KEY = "game_df"
+LEGACY_SESSION_DATA_KEY = "house_df"
+
 st.markdown("# Practical Applications of Machine Learning (PAML)")
 
 #############################################
@@ -239,14 +242,17 @@ def load_dataset(filepath):
     Output: pandas dataframe df
     """
     data = pd.read_csv(filepath)
-    st.session_state['house_df'] = data
+    st.session_state[SESSION_DATA_KEY] = data
+    st.session_state[LEGACY_SESSION_DATA_KEY] = data
     return data
 
 random.seed(10)
 ###################### FETCH DATASET #######################
 df = None
-if('house_df' in st.session_state):
-    df = st.session_state['house_df']
+if(SESSION_DATA_KEY in st.session_state):
+    df = st.session_state[SESSION_DATA_KEY]
+elif(LEGACY_SESSION_DATA_KEY in st.session_state):
+    df = st.session_state[LEGACY_SESSION_DATA_KEY]
 else:
     filepath = st.file_uploader('Upload a Dataset', type=['csv', 'txt'])
     if(filepath):

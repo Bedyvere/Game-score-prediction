@@ -11,6 +11,9 @@ import math
 
 # Need to add Naive Bayes algo in this chunk
 
+SESSION_DATA_KEY = "game_df"
+LEGACY_SESSION_DATA_KEY = "house_df"
+
 st.markdown("# Practical Applications of Machine Learning (PAML)")
 
 #############################################
@@ -393,7 +396,8 @@ def load_dataset(filepath):
     '''
     try:
         data = pd.read_csv(filepath)
-        st.session_state['house_df'] = data
+        st.session_state[SESSION_DATA_KEY] = data
+        st.session_state[LEGACY_SESSION_DATA_KEY] = data
     except ValueError as err:
             st.write({str(err)})
     return data
@@ -405,8 +409,10 @@ filepath = st.file_uploader('Upload a Dataset', type=['csv', 'txt'])
 if(filepath):
     df = load_dataset(filepath)
 
-if('house_df' in st.session_state):
-    df = st.session_state['house_df']
+if(SESSION_DATA_KEY in st.session_state):
+    df = st.session_state[SESSION_DATA_KEY]
+elif(LEGACY_SESSION_DATA_KEY in st.session_state):
+    df = st.session_state[LEGACY_SESSION_DATA_KEY]
 
 ###################### DRIVER CODE #######################
 
