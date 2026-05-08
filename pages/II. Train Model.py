@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 import math
 #############################################
 
-# Need to add Naive Bayes algo in this chunk
+# Models: Linear, Polynomial, Ridge, Lasso Regression + Naive Bayes (IGN binary classification)
 
 SESSION_DATA_KEY = "game_df"
 LEGACY_SESSION_DATA_KEY = "house_df"
@@ -384,6 +384,116 @@ class LassoRegression(LinearRegression):
         
         return self
 
+# Naive Bayes Classifier
+class NaiveBayes(object):
+    def __init__(self, classes, alpha=1):
+        self.model_name = 'Naive Bayes'
+        self.classes = classes
+        if not isinstance(self.classes, np.ndarray):
+            self.classes = np.array(self.classes)
+        self.num_classes = len(self.classes)
+        mapping = {i: k for i, k in enumerate(self.classes)}
+        self.idx_to_class = np.vectorize(mapping.get)
+        self.likelihood_history = []
+        self.alpha = alpha
+        self.W = []
+        self.W_prior = []
+
+    def predict_logprob(self, X):
+        """
+        Computes the log probability of each class given input features.
+        Input:  X – input features
+        Output: y_pred – log-probability matrix (n_samples × n_classes)
+        """
+        y_pred = None
+        try:
+            X = np.array(X)
+            y_pred = X @ np.log(self.W).T + np.log(self.W_prior)
+        except ValueError as err:
+            st.write({str(err)})
+        return y_pred
+
+    def predict_probability(self, X):
+        """
+        Probabilistic estimate P(y = High | x).
+        Input:  X – input features
+        Output: y_pred – probability of High class (0–1)
+        """
+        y_pred = None
+        try:
+            X = X - X.min()
+            if not isinstance(X, np.ndarray):
+                X = np.array(X)
+            pos_class_idx = np.where(self.classes == 1)[0][0]
+            y_pred = self.predict_logprob(X)
+            probs = np.exp(np.array(y_pred))
+            probs = np.exp(probs) / np.sum(np.exp(probs), axis=1)[:, None]
+            y_pred = probs[:, pos_class_idx]
+        except ValueError as err:
+            st.write({str(err)})
+        return y_pred
+
+    def predict(self, X):
+        """
+        Predicts binary class label (0=Low, 1=High) for each sample.
+        Input:  X – input features
+        Output: y_pred – array of predicted class labels
+        """
+        y_pred = None
+        try:
+            X = X - X.min()
+            y_pred = self.predict_logprob(X)
+            y_pred = np.argmax(y_pred, axis=1)
+            mapping = {i: k for i, k in enumerate(self.classes)}
+            idx_to_class = np.vectorize(mapping.get)
+            y_pred = idx_to_class(y_pred)
+        except ValueError as err:
+            st.write({str(err)})
+        return y_pred
+
+    def fit(self, X, Y):
+        """
+        Closed-form Naive Bayes fit with Laplace smoothing.
+        Input:  X – features, Y – binary labels (0/1)
+        Output: self (trained model)
+        """
+        try:
+            X = X - X.min()  # shift to non-negative for Naive Bayes
+            num_examples, num_features = X.shape
+            self.W = np.zeros((self.num_classes, num_features))
+            self.W_prior = np.zeros(self.num_classes)
+            for ind, class_k in enumerate(self.classes):
+                X_class_k = X[Y == class_k]
+                self.W[ind] = (np.sum(X_class_k, axis=0) + self.alpha)
+                self.W[ind] /= (np.sum(X_class_k) + (self.alpha * num_features))
+                self.W_prior[ind] = X_class_k.shape[0] / num_examples
+            self.W = np.clip(self.W, 1e-10, 1.0)
+            self.W_prior = np.clip(self.W_prior, 1e-10, 1.0)
+            log_likelihood = np.log(self.predict_probability(X)).mean()
+            self.likelihood_history.append(log_likelihood)
+        except ValueError as err:
+            st.write({str(err)})
+        return self
+
+    def get_weights(self):
+        """Prints and returns trained model weights."""
+        weights = None
+        try:
+            if len(self.W):
+                st.write('-------------------------')
+                st.write('Model Coefficients for ' + self.model_name)
+                num_positive_weights = np.sum(self.W >= 0) + np.sum(self.W_prior >= 0)
+                num_negative_weights = np.sum(self.W < 0) + np.sum(self.W_prior < 0)
+                st.write('* Number of positive weights: {}'.format(num_positive_weights))
+                st.write('* Number of negative weights: {}'.format(num_negative_weights))
+                weights = [self.W, self.W_prior]
+            else:
+                st.write('There are no model weights to print. Train a model first.')
+        except ValueError as err:
+            st.write(str(err))
+        return weights
+
+
 # Helper functions
 def load_dataset(filepath):
     '''
@@ -478,12 +588,13 @@ if df is not None:
                             (len(X_train)+len(X_val)+len(y_train)+len(y_val)))*100
 
     regression_methods_options = ['Multiple Linear Regression',
-                                  'Polynomial Regression', 
+                                  'Polynomial Regression',
                                   'Ridge Regression',
-                                  'Lasso Regression']
+                                  'Lasso Regression',
+                                  'Naive Bayes']
     # Collect ML Models of interests
     regression_model_select = st.multiselect(
-        label='Select regression model for prediction',
+        label='Select model for prediction / classification',
         options=regression_methods_options,
     )
     st.write('You selected the follow models: {}'.format(
@@ -699,7 +810,13 @@ if df is not None:
     weights_dict = {}
     if(inspect_models):
         for model_name in inspect_models:
-            weights_dict = trained_models[model_name].get_weights(model_name, feature_input_select)
+            model = trained_models.get(model_name)
+            if model is None:
+                st.write('{} is untrained'.format(model_name))
+            elif model_name == 'Naive Bayes':
+                weights_dict = model.get_weights()
+            else:
+                weights_dict = model.get_weights(model_name, feature_input_select)
 
     # Inspect model cost
     st.markdown('## Inspect model cost')
@@ -715,6 +832,9 @@ if df is not None:
 
     if(inspect_model_cost):
         try:
+            if trained_models.get(inspect_model_cost) is None:
+                st.write('{} is untrained'.format(inspect_model_cost))
+                raise ValueError('model not trained')
             fig = make_subplots(rows=1, cols=1,
                 shared_xaxes=True, vertical_spacing=0.1)
             cost_history=trained_models[inspect_model_cost].cost_history
@@ -733,5 +853,74 @@ if df is not None:
             st.plotly_chart(fig)
         except Exception as e:
             print(e)
+
+    # Naive Bayes Classification
+    if (regression_methods_options[4] in regression_model_select):
+        st.markdown('#### ' + regression_methods_options[4])
+        st.markdown(
+            'Binary classification: **High (1)** if score ≥ threshold, **Low (0)** otherwise.'
+        )
+
+        nb_score_options = [c for c in df.select_dtypes(include='number').columns
+                            if c in ('IGN', 'Avg_Reviews', 'Metacritic', 'GameSpot', 'Destructoid')]
+        if not nb_score_options:
+            nb_score_options = list(df.select_dtypes(include='number').columns)
+
+        nb_target_col = st.selectbox(
+            'Score column to binarize',
+            options=nb_score_options,
+            index=nb_score_options.index('IGN') if 'IGN' in nb_score_options else 0,
+            key='nb_target_col'
+        )
+
+        nb_threshold = st.slider(
+            'Threshold (≥ threshold → High=1, else Low=0)',
+            min_value=0.0, max_value=10.0, value=7.5, step=0.5,
+            key='nb_threshold'
+        )
+        st.write('Games with {} ≥ {:.1f} → **High (1)**, otherwise → **Low (0)**'.format(
+            nb_target_col, nb_threshold))
+
+        nb_alpha_input = st.number_input(
+            'Laplace smoothing alpha', min_value=0.0, value=1.0, step=0.1, key='nb_alpha'
+        )
+
+        nb_feature_select = st.multiselect(
+            'Select features for Naive Bayes input',
+            options=[f for f in list(df.select_dtypes(include='number').columns)
+                     if f != nb_target_col],
+            key='nb_feature_multiselect'
+        )
+
+        if st.button('Train Naive Bayes Model'):
+            if nb_feature_select:
+                try:
+                    nb_cols = nb_feature_select + [nb_target_col]
+                    df_nb = df.dropna(subset=nb_cols)
+                    X_nb = df_nb[nb_feature_select].values.astype(float)
+                    y_nb = (df_nb[nb_target_col] >= nb_threshold).astype(int).values
+
+                    high_count = int(y_nb.sum())
+                    low_count = len(y_nb) - high_count
+                    st.write('Class distribution — High: {}, Low: {}, Total: {}'.format(
+                        high_count, low_count, len(y_nb)))
+
+                    X_nb_train, X_nb_val, y_nb_train, y_nb_val = split_dataset(
+                        X_nb, y_nb, split_number)
+
+                    nb_model = NaiveBayes(classes=np.array([0, 1]), alpha=nb_alpha_input)
+                    nb_model.fit(X_nb_train, y_nb_train)
+                    st.session_state[regression_methods_options[4]] = nb_model
+                    st.success('Naive Bayes Model trained!')
+                except Exception as e:
+                    st.write(str(e))
+            else:
+                st.warning('Please select at least one feature.')
+
+        if regression_methods_options[4] not in st.session_state:
+            st.write('Naive Bayes Model is untrained')
+        else:
+            st.write('Naive Bayes Model trained')
+            st.session_state[regression_methods_options[4]].get_weights()
 
     st.write('Continue to Test Model')
