@@ -13,6 +13,19 @@ TRAIN_STATE_KEY = "train_state"
 TRAINED_MODELS_KEY = "trained_models"
 DEPLOYMENT_KEY = "deployment_summary"
 COMPARISON_KEY = "latest_model_comparison"
+LEGACY_TARGET_KEY = "target"
+LEGACY_FEATURES_KEY = "feature"
+
+METRIC_COLUMN_LABELS = {
+    "mean_absolute_error": "MAE",
+    "mean_squared_error": "MSE",
+    "root_mean_squared_error": "RMSE",
+    "r2_score": "R2",
+    "accuracy": "Accuracy",
+    "precision": "Precision",
+    "recall": "Recall",
+    "f1_score": "F1",
+}
 
 REGRESSION_MODEL_NAMES = [
     "Multiple Linear Regression",
@@ -66,10 +79,49 @@ def r2(y_true, y_pred):
     return float(1 - (residual_sum_squares / total_sum_squares))
 
 
+def mse(y_true, y_pred):
+    y_true = flatten(y_true)
+    y_pred = flatten(y_pred)
+    return float(np.mean((y_true - y_pred) ** 2))
+
+
+def accuracy(y_true, y_pred):
+    y_true = flatten(y_true)
+    y_pred = flatten(y_pred)
+    return float(np.mean(y_true == y_pred))
+
+
+def precision(y_true, y_pred):
+    y_true = flatten(y_true)
+    y_pred = flatten(y_pred)
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    fp = np.sum((y_true == 0) & (y_pred == 1))
+    return float(tp / (tp + fp + 1e-8))
+
+
+def recall(y_true, y_pred):
+    y_true = flatten(y_true)
+    y_pred = flatten(y_pred)
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == 0))
+    return float(tp / (tp + fn + 1e-8))
+
+
+def f1_score(y_true, y_pred):
+    metric_precision = precision(y_true, y_pred)
+    metric_recall = recall(y_true, y_pred)
+    return float(2 * metric_precision * metric_recall / (metric_precision + metric_recall + 1e-8))
+
+
 METRICS_MAP = {
     "mean_absolute_error": mae,
+    "mean_squared_error": mse,
     "root_mean_squared_error": rmse,
     "r2_score": r2,
+    "accuracy": accuracy,
+    "precision": precision,
+    "recall": recall,
+    "f1_score": f1_score,
 }
 
 
@@ -78,6 +130,28 @@ def load_dataset(source):
     st.session_state[SESSION_DATA_KEY] = df
     st.session_state[LEGACY_SESSION_DATA_KEY] = df
     return df
+
+
+def metric_column_name(split_name, metric):
+    return f"{split_name} {METRIC_COLUMN_LABELS.get(metric, metric)}"
+
+
+def sync_train_state(train_state):
+    if train_state is None:
+        return
+
+    st.session_state[TRAIN_STATE_KEY] = train_state
+    st.session_state["X_train"] = train_state["X_train"]
+    st.session_state["X_val"] = train_state["X_val"]
+    st.session_state["y_train"] = train_state["y_train"]
+    st.session_state["y_val"] = train_state["y_val"]
+
+    if train_state.get("target") is not None:
+        st.session_state[LEGACY_TARGET_KEY] = train_state["target"]
+    if train_state.get("features") is not None:
+        st.session_state[LEGACY_FEATURES_KEY] = train_state["features"]
+    if train_state.get("split_pct") is not None:
+        st.session_state["split_pct"] = train_state["split_pct"]
 
 
 def build_train_state_from_dataset(df):
@@ -130,8 +204,66 @@ def build_train_state_from_dataset(df):
         "y_val": y_val,
         "feature_defaults": modeling_df[features].median(numeric_only=True).to_dict(),
     }
-    st.session_state[TRAIN_STATE_KEY] = train_state
+    sync_train_state(train_state)
     return train_state
+
+
+def restore_data(df):
+    train_state = st.session_state.get(TRAIN_STATE_KEY)
+    if train_state is not None:
+        sync_train_state(train_state)
+        return (
+            train_state["X_train"],
+            train_state["X_val"],
+            train_state["y_train"],
+            train_state["y_val"],
+        )
+
+    X_train = st.session_state.get("X_train")
+    X_val = st.session_state.get("X_val")
+    y_train = st.session_state.get("y_train")
+    y_val = st.session_state.get("y_val")
+
+    if all(value is not None for value in [X_train, X_val, y_train, y_val]):
+        features = st.session_state.get(LEGACY_FEATURES_KEY, [])
+        target = st.session_state.get(LEGACY_TARGET_KEY)
+        feature_defaults = {}
+        rows_used = None
+
+        if features and target and all(column in df.columns for column in [*features, target]):
+            modeling_df = df[features + [target]].dropna().copy()
+            rows_used = int(len(modeling_df))
+            feature_defaults = modeling_df[features].median(numeric_only=True).to_dict()
+
+        split_pct = st.session_state.get("split_pct")
+        if split_pct is None and len(X_train) + len(X_val) > 0:
+            split_pct = int(round(len(X_val) * 100 / (len(X_train) + len(X_val))))
+
+        train_state = {
+            "target": target,
+            "features": features,
+            "split_pct": split_pct,
+            "random_state": 45,
+            "rows_used": rows_used,
+            "X_train": X_train,
+            "X_val": X_val,
+            "y_train": y_train,
+            "y_val": y_val,
+            "feature_defaults": feature_defaults,
+        }
+        sync_train_state(train_state)
+        return X_train, X_val, y_train, y_val
+
+    train_state = build_train_state_from_dataset(df)
+    if train_state is None:
+        return None, None, None, None
+
+    return (
+        train_state["X_train"],
+        train_state["X_val"],
+        train_state["y_train"],
+        train_state["y_val"],
+    )
 
 
 def get_dataset_and_state():
@@ -146,9 +278,15 @@ def get_dataset_and_state():
             df = load_dataset(uploaded)
 
     train_state = st.session_state.get(TRAIN_STATE_KEY)
-    if df is not None and train_state is None:
+    if (
+        df is not None
+        and train_state is None
+        and not all(key in st.session_state for key in ["X_train", "X_val", "y_train", "y_val"])
+    ):
         st.info("No stored training split was found, so this page can rebuild one from the current dataset.")
-        train_state = build_train_state_from_dataset(df)
+    if df is not None:
+        restore_data(df)
+        train_state = st.session_state.get(TRAIN_STATE_KEY)
     return df, train_state
 
 
@@ -207,7 +345,7 @@ def plot_learning_curve(X_train, X_val, y_train, y_val, trained_model, metrics, 
     return fig
 
 
-def build_comparison_table(selected_models, trained_models, train_state):
+def build_comparison_table(selected_models, trained_models, train_state, metrics=None):
     rows = []
     X_train = train_state["X_train"]
     X_val = train_state["X_val"]
@@ -219,38 +357,50 @@ def build_comparison_table(selected_models, trained_models, train_state):
         "mean_absolute_error",
         "r2_score",
     ]
+    metrics_to_show = list(dict.fromkeys((metrics or []) + ranking_metrics))
 
     for model_name in selected_models:
         model_info = trained_models[model_name]
         model = model_info["model"]
-        train_metrics = compute_eval_metrics(X_train, y_train, model, ranking_metrics)
-        val_metrics = compute_eval_metrics(X_val, y_val, model, ranking_metrics)
-        rows.append(
-            {
-                "Model": model_name,
-                "Target": model_info["target"],
-                "Features": ", ".join(model_info["features"]),
-                "Train RMSE": train_metrics["root_mean_squared_error"],
-                "Validation RMSE": val_metrics["root_mean_squared_error"],
-                "Train MAE": train_metrics["mean_absolute_error"],
-                "Validation MAE": val_metrics["mean_absolute_error"],
-                "Train R2": train_metrics["r2_score"],
-                "Validation R2": val_metrics["r2_score"],
-            }
-        )
+        train_metrics = compute_eval_metrics(X_train, y_train, model, metrics_to_show)
+        val_metrics = compute_eval_metrics(X_val, y_val, model, metrics_to_show)
+
+        row = {
+            "Model": model_name,
+            "Target": model_info["target"],
+            "Features": ", ".join(model_info["features"]),
+        }
+        for metric in metrics_to_show:
+            row[metric_column_name("Train", metric)] = train_metrics[metric]
+            row[metric_column_name("Validation", metric)] = val_metrics[metric]
+        rows.append(row)
 
     comparison_df = pd.DataFrame(rows)
     if comparison_df.empty:
         return comparison_df
 
-    comparison_df["RMSE Rank"] = comparison_df["Validation RMSE"].rank(method="dense", ascending=True)
-    comparison_df["MAE Rank"] = comparison_df["Validation MAE"].rank(method="dense", ascending=True)
-    comparison_df["R2 Rank"] = comparison_df["Validation R2"].rank(method="dense", ascending=False)
+    comparison_df["RMSE Rank"] = comparison_df[metric_column_name("Validation", "root_mean_squared_error")].rank(
+        method="dense",
+        ascending=True,
+    )
+    comparison_df["MAE Rank"] = comparison_df[metric_column_name("Validation", "mean_absolute_error")].rank(
+        method="dense",
+        ascending=True,
+    )
+    comparison_df["R2 Rank"] = comparison_df[metric_column_name("Validation", "r2_score")].rank(
+        method="dense",
+        ascending=False,
+    )
     comparison_df["Overall Rank"] = (
         comparison_df["RMSE Rank"] + comparison_df["MAE Rank"] + comparison_df["R2 Rank"]
     )
     comparison_df = comparison_df.sort_values(
-        by=["Overall Rank", "Validation RMSE", "Validation MAE", "Validation R2"],
+        by=[
+            "Overall Rank",
+            metric_column_name("Validation", "root_mean_squared_error"),
+            metric_column_name("Validation", "mean_absolute_error"),
+            metric_column_name("Validation", "r2_score"),
+        ],
         ascending=[True, True, True, False],
     ).reset_index(drop=True)
     return comparison_df
@@ -354,7 +504,7 @@ if df is not None and train_state is not None:
 
     if selected_models and review_plot:
         if st.button("Evaluate Selected Models"):
-            comparison_df = build_comparison_table(selected_models, regression_models, train_state)
+            comparison_df = build_comparison_table(selected_models, regression_models, train_state, metric_select)
             st.session_state[COMPARISON_KEY] = comparison_df
 
     comparison_df = st.session_state.get(COMPARISON_KEY)
@@ -362,13 +512,10 @@ if df is not None and train_state is not None:
         st.markdown("## Model Comparison")
         display_columns = ["Model"]
         if "Metric Results" in review_plot:
-            metric_column_map = {
-                "root_mean_squared_error": ["Train RMSE", "Validation RMSE"],
-                "mean_absolute_error": ["Train MAE", "Validation MAE"],
-                "r2_score": ["Train R2", "Validation R2"],
-            }
             for metric in metric_select:
-                display_columns.extend(metric_column_map[metric])
+                display_columns.extend(
+                    [metric_column_name("Train", metric), metric_column_name("Validation", metric)]
+                )
             display_columns.extend(["Overall Rank"])
             st.dataframe(comparison_df[display_columns], use_container_width=True)
 
