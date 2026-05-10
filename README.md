@@ -62,10 +62,13 @@ https://game-score-prediction-paml.streamlit.app/
 
 
 
+
 ## Repository Structure
 
 ```text
 main.py
+notebooks/
+  Game_Score_Prediction_Summary.ipynb
 pages/
   I. EDA.py
   II. Train Model.py
