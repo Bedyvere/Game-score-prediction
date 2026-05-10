@@ -46,7 +46,7 @@ The repository includes merged game and character data in the `datasets/` folder
 
 Candidate models are trained on the `Train Model` page and stored in Streamlit session state. On the `Test Model` page, the trained regression models are compared on the held-out validation set. The deployed model is chosen based on validation performance, with validation RMSE treated as the primary deployment metric for continuous score prediction and MAE/R2 used as supporting checks. After deployment, the same model powers the prediction form shown in the app.
 
-## Run the App Locally
+## Run the App 
 
 1. Open a terminal in the project root.
 2. Install the required Python packages if needed.
@@ -56,8 +56,11 @@ Candidate models are trained on the `Train Model` page and stored in Streamlit s
 py -m streamlit run main.py
 ```
 
-4. Open the local URL shown in the terminal.
-5. Start on the `EDA` page and move through the pages in order.
+or, run it through deployed website:
+
+https://game-score-prediction-paml.streamlit.app/
+
+
 
 ## Repository Structure
 
