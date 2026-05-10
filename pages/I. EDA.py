@@ -12,6 +12,14 @@ from sklearn.preprocessing import OrdinalEncoder
 st.markdown("# Practical Applications of Machine Learning (PAML)")
 st.markdown("### Game Score Prediction and Critics Analysis")
 st.markdown("# Exploratory Dataset Analysis")
+st.caption(
+    "This page is the front-end entry point of the Streamlit application. "
+    "Use it to inspect, clean, and transform the dataset before moving to model training, testing, and deployment."
+)
+st.info(
+    "Recommended workflow: clean the dataset here, train candidate models on **Train Model**, "
+    "compare and deploy the best candidate on **Test Model**, and use **Critical Analysis** for the rubric-ready deployment summary."
+)
 
 
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "..", "datasets")
