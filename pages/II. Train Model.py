@@ -407,11 +407,7 @@ if df is not None:
         )
         
         # Data leakage warning
-    features = st.multiselect(
-        "Select numeric input features",
-        options=[column for column in numeric_columns if column != target],
-        default=default_features,
-    )
+  
     
     leakage_features = ["Metacritic", "IGN", "GameSpot", "Destructoid"]
     
