@@ -389,18 +389,36 @@ if df is not None:
         options=numeric_columns,
         index=numeric_columns.index(default_target),
     )
-
+    
     default_features = [
-        column for column in ["Metacritic", "IGN", "GameSpot", "Destructoid", "Percentage_non_male_num", "Sexualization"]
+        column for column in ["Percentage_non_male_num", "Sexualization"]
         if column in numeric_columns and column != target
     ]
+    
     if not default_features:
-        default_features = [column for column in numeric_columns if column != target][:4]
-
+        default_features = [
+            column for column in numeric_columns if column != target
+        ][:4]
+    
     features = st.multiselect(
         "Select numeric input features",
         options=[column for column in numeric_columns if column != target],
         default=default_features,
+    )
+    
+    # Data leakage warning
+    leakage_features = ["Metacritic", "IGN", "GameSpot", "Destructoid"]
+    
+    selected_leakage_features = [
+        col for col in leakage_features if col in features
+    ]
+
+if selected_leakage_features:
+    st.warning(
+        "⚠️ Data leakage risk warning: "
+        f"{', '.join(selected_leakage_features)} are also critics' review scores. "
+        "Predicting one review score from another can give misleadingly high "
+        "performance and may cause data leakage."
     )
 
     split_col, random_col = st.columns(2)
