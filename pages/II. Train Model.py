@@ -4,7 +4,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import GaussianNB
-from sklearn.preprocessing import PolynomialFeatures
 
 
 SESSION_DATA_KEY = "game_df"
@@ -14,10 +13,11 @@ TRAINED_MODELS_KEY = "trained_models"
 
 REGRESSION_MODEL_NAMES = [
     "Multiple Linear Regression",
-    "Polynomial Regression",
     "Ridge Regression",
     "Lasso Regression",
 ]
+
+LEAKAGE_FEATURES = {"Metacritic", "IGN", "GameSpot", "Destructoid"}
 CLASSIFICATION_MODEL_NAMES = ["Naive Bayes"]
 
 
@@ -99,59 +99,6 @@ class LinearRegression:
         weights = pd.DataFrame(
             {
                 "term": ["bias"] + list(features),
-                "weight": self.W.reshape(-1),
-            }
-        )
-        st.write(model_name)
-        st.dataframe(weights, use_container_width=True)
-        return {model_name: weights}
-
-
-class PolynomialRegression(LinearRegression):
-    def __init__(self, degree, learning_rate, num_iterations):
-        super().__init__(learning_rate=learning_rate, num_iterations=num_iterations)
-        self.degree = degree
-        self.poly = PolynomialFeatures(degree=self.degree, include_bias=True)
-        self.poly_mean_ = None
-        self.poly_std_ = None
-
-    def _transform(self, X, fit=False):
-        X = np.asarray(X, dtype=float)
-        transformed = self.poly.fit_transform(X) if fit else self.poly.transform(X)
-        transformed = transformed.astype(float)
-
-        if fit:
-            self.poly_mean_ = transformed[:, 1:].mean(axis=0)
-            self.poly_std_ = transformed[:, 1:].std(axis=0)
-            self.poly_std_[self.poly_std_ == 0] = 1.0
-
-        if transformed.shape[1] > 1:
-            transformed[:, 1:] = (transformed[:, 1:] - self.poly_mean_) / self.poly_std_
-        return transformed
-
-    def fit(self, X, Y):
-        self.X = self._transform(X, fit=True)
-        self.Y = to_column_vector(Y)
-        self.W = np.zeros((self.X.shape[1], 1))
-        self.cost_history = []
-
-        for _ in range(self.num_iterations):
-            y_pred = self.X @ self.W
-            error = y_pred - self.Y
-            gradient = (2 / len(self.X)) * (self.X.T @ error)
-            self.W = self.W - self.learning_rate * gradient
-            self.cost_history.append(float(np.mean((self.Y - y_pred) ** 2)))
-        return self
-
-    def predict(self, X):
-        transformed = self._transform(X, fit=False)
-        return transformed @ self.W
-
-    def get_weights(self, model_name, features):
-        feature_names = self.poly.get_feature_names_out(features)
-        weights = pd.DataFrame(
-            {
-                "term": feature_names,
                 "weight": self.W.reshape(-1),
             }
         )
@@ -285,12 +232,6 @@ def build_model(model_name, hyperparameters):
             learning_rate=hyperparameters["learning_rate"],
             num_iterations=hyperparameters["num_iterations"],
         )
-    if model_name == "Polynomial Regression":
-        return PolynomialRegression(
-            degree=hyperparameters["degree"],
-            learning_rate=hyperparameters["learning_rate"],
-            num_iterations=hyperparameters["num_iterations"],
-        )
     if model_name == "Ridge Regression":
         return RidgeRegression(
             learning_rate=hyperparameters["learning_rate"],
@@ -389,40 +330,30 @@ if df is not None:
         options=numeric_columns,
         index=numeric_columns.index(default_target),
     )
-    
+
     default_features = [
         column for column in ["Percentage_non_male_num", "Sexualization"]
         if column in numeric_columns and column != target
     ]
-    
+
     if not default_features:
         default_features = [
             column for column in numeric_columns if column != target
         ][:4]
-    
+
+    safe_feature_options = [
+        col for col in numeric_columns if col != target and col not in LEAKAGE_FEATURES
+    ]
+    st.caption(
+        "Note: Metacritic, IGN, GameSpot, and Destructoid are excluded from feature selection "
+        "because they are components of the Avg_Reviews target — using them would cause target leakage."
+    )
     features = st.multiselect(
         "Select numeric input features",
-        options=[column for column in numeric_columns if column != target],
-        default=default_features,
-        )
-        
-        # Data leakage warning
-  
-    
-    leakage_features = ["Metacritic", "IGN", "GameSpot", "Destructoid"]
-    
-    selected_leakage_features = [
-        col for col in leakage_features if col in features
-    ]
-    
-    if selected_leakage_features:
-        st.warning(
-            "⚠️ Data leakage risk warning: "
-            f"{', '.join(selected_leakage_features)} are also critics' review scores. "
-            "Predicting one review score from another can give misleadingly high "
-            "performance and may cause data leakage."
-        )
-    
+        options=safe_feature_options,
+        default=[f for f in default_features if f in safe_feature_options],
+    )
+
     split_col, random_col = st.columns(2)
     with split_col:
         split_pct = st.slider("Validation split (%)", min_value=10, max_value=40, value=30, step=5)
@@ -512,58 +443,6 @@ if df is not None:
                 )
                 st.success("Multiple Linear Regression trained and saved to session state.")
                 plot_cost_history("Multiple Linear Regression", model)
-
-    if "Polynomial Regression" in candidate_models:
-        with st.expander("Polynomial Regression"):
-            degree = st.number_input(
-                "Polynomial degree",
-                min_value=2,
-                max_value=6,
-                value=2,
-                step=1,
-                key="poly_degree",
-            )
-            learning_rate = st.number_input(
-                "Learning rate ",
-                min_value=0.00001,
-                max_value=1.0,
-                value=0.001,
-                step=0.00001,
-                format="%.5f",
-                key="poly_lr",
-            )
-            num_iterations = st.number_input(
-                "Gradient descent iterations ",
-                min_value=10,
-                max_value=10000,
-                value=400,
-                step=10,
-                key="poly_iter",
-            )
-            if st.button("Train Polynomial Regression", key="train_poly_button"):
-                model = build_model(
-                    "Polynomial Regression",
-                    {
-                        "degree": int(degree),
-                        "learning_rate": float(learning_rate),
-                        "num_iterations": int(num_iterations),
-                    },
-                )
-                model.fit(X_train, y_train)
-                register_trained_model(
-                    "Polynomial Regression",
-                    model,
-                    task_type="regression",
-                    target=target,
-                    features=features,
-                    hyperparameters={
-                        "degree": int(degree),
-                        "learning_rate": float(learning_rate),
-                        "num_iterations": int(num_iterations),
-                    },
-                )
-                st.success("Polynomial Regression trained and saved to session state.")
-                plot_cost_history("Polynomial Regression", model)
 
     if "Ridge Regression" in candidate_models:
         with st.expander("Ridge Regression"):
@@ -685,8 +564,8 @@ if df is not None:
             )
             nb_features = st.multiselect(
                 "Select numeric features for Naive Bayes",
-                options=[column for column in numeric_columns if column != target],
-                default=features,
+                options=[column for column in numeric_columns if column != target and column not in LEAKAGE_FEATURES],
+                default=[f for f in features if f not in LEAKAGE_FEATURES],
                 key="nb_features",
             )
             if st.button("Train Naive Bayes", key="train_nb_button"):
