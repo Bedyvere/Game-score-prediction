@@ -29,7 +29,6 @@ METRIC_COLUMN_LABELS = {
 
 REGRESSION_MODEL_NAMES = [
     "Multiple Linear Regression",
-    "Polynomial Regression",
     "Ridge Regression",
     "Lasso Regression",
 ]
@@ -166,10 +165,14 @@ def build_train_state_from_dataset(df):
         index=numeric_columns.index(default_target),
         key="fallback_target",
     )
+    leakage_features = {"Metacritic", "IGN", "GameSpot", "Destructoid"}
+    safe_fallback_options = [
+        column for column in numeric_columns if column != target and column not in leakage_features
+    ]
     features = st.multiselect(
         "Select numeric features",
-        options=[column for column in numeric_columns if column != target],
-        default=[column for column in numeric_columns if column != target][:4],
+        options=safe_fallback_options,
+        default=safe_fallback_options[:4],
         key="fallback_features",
     )
     split_pct = st.slider(
