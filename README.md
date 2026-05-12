@@ -1,10 +1,12 @@
 # Game Score Prediction
 
-Game Score Prediction and Critics Analysis is a Streamlit application for exploring how video game characteristics relate to professional review scores. The project combines exploratory data analysis, machine learning model training, validation-based model selection, and an interactive front end for score prediction.
+Game Score Prediction and Critics Analysis is a Streamlit application for exploring how video game characteristics relate to professional review scores. 
+Users can upload data, choose models, tune regularization, compare metrics, and inspect feature coefficients.
+The app supports an end-to-end ML workflow: EDA → preprocessing → training → testing → interpretation.
 
 ## Project Goal
 
-Media review scores affect a game's visibility, reputation, and commercial success. This project studies whether review outcomes are associated only with general game attributes or also with representation-related features such as female character presence and sexualization. The app is designed to support both prediction and critical analysis.
+Critic review scores shape a game's commercial success and public perception. Our central question was whether review scores are driven purely by gameplay quality, or whether they may also be associated with representation-related features such as female character presence and sexualization. This motivate us to explored whether representation-related variables contribute predictive information alongside traditional features such as genre and platform. Prior work relies on descriptive stats, while not delve into ML methology. 
 
 ## Streamlit App Overview
 
@@ -25,18 +27,17 @@ The Streamlit program is the main way to use this project. It is organized as a 
 - Explore the data with tables, summary metrics, and interactive visualizations.
 - Apply lightweight preprocessing such as feature removal, encoding, scaling, feature creation, and outlier handling.
 - Train multiple models in one session, including:
+  3 regression model, 
   - Multiple Linear Regression
-  - Polynomial Regression
   - Ridge Regression
   - Lasso Regression
+  and a calcification model, 
   - Naive Bayes
+and finetune with adjusting learning rate and more! 
 - Evaluate candidate models with held-out validation metrics such as RMSE, MAE, and R2.
 - Deploy the selected regression model inside the Streamlit session.
 - Enter feature values in a prediction form and generate a predicted review score.
 
-## Why Streamlit Fits This Project
-
-Streamlit makes the project easier to understand and demonstrate because the front end and back end are connected in one lightweight application. A user can move from data exploration to model training and then to deployment without leaving the browser or writing additional code. This is especially useful for classroom presentation, model comparison, and explaining how prediction results are generated.
 
 ## Data and Features
 
@@ -56,7 +57,7 @@ Candidate models are trained on the `Train Model` page and stored in Streamlit s
 py -m streamlit run main.py
 ```
 
-or, run it through deployed website:
+or, run it through deployed website (recommended):
 
 https://game-score-prediction-paml.streamlit.app/
 
@@ -79,26 +80,11 @@ images/
 README.md
 ```
 
-## Target Users
-
-This application is intended for:
-
-- Students building an end-to-end machine learning project
-- Instructors evaluating Streamlit-based ML workflows
-- Researchers studying media review patterns
-- Game developers and critics interested in how representation-related features may relate to scoring outcomes
-
-## Limitations
-
-- The current deployment is session-based inside Streamlit rather than persisted as a standalone production service.
-- The dataset is relatively small, so model results should be interpreted carefully.
-- The app is best suited for project demonstration, experimentation, and analysis rather than large-scale production inference.
-
 ## Authors
 
-- Samyuktha Lokanandi (`sl3539`)
-- Maggie Liang (`ml2927`)
-- Xueer Zhang (`xz946`)
-- Yujun Che (`yc2989`)
-- Vivian Xie (`xx374`)
-- Rui Chen (`rc985`)
+- Samyuktha Lokanandi (`sl3539@cornell.edu`)
+- Maggie Liang (`ml2927@cornell.edu`)
+- Xueer Zhang (`xz946@cornell.edu`)
+- Yujun Che (`yc2989@cornell.edu`)
+- Vivian Xie (`xx374@cornell.edu`)
+- Rui Chen (`rc985@cornell.edu`)
