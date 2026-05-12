@@ -404,23 +404,29 @@ if df is not None:
         "Select numeric input features",
         options=[column for column in numeric_columns if column != target],
         default=default_features,
+        )
+        
+        # Data leakage warning
+    features = st.multiselect(
+        "Select numeric input features",
+        options=[column for column in numeric_columns if column != target],
+        default=default_features,
     )
     
-    # Data leakage warning
     leakage_features = ["Metacritic", "IGN", "GameSpot", "Destructoid"]
     
     selected_leakage_features = [
         col for col in leakage_features if col in features
     ]
-
-if selected_leakage_features:
-    st.warning(
-        "⚠️ Data leakage risk warning: "
-        f"{', '.join(selected_leakage_features)} are also critics' review scores. "
-        "Predicting one review score from another can give misleadingly high "
-        "performance and may cause data leakage."
-    )
-
+    
+    if selected_leakage_features:
+        st.warning(
+            "⚠️ Data leakage risk warning: "
+            f"{', '.join(selected_leakage_features)} are also critics' review scores. "
+            "Predicting one review score from another can give misleadingly high "
+            "performance and may cause data leakage."
+        )
+    
     split_col, random_col = st.columns(2)
     with split_col:
         split_pct = st.slider("Validation split (%)", min_value=10, max_value=40, value=30, step=5)
