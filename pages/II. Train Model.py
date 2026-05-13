@@ -498,11 +498,18 @@ if df is not None:
 
     if "Lasso Regression" in candidate_models:
         with st.expander("Lasso Regression"):
+            # Lasso uses subgradient descent with np.sign() rather than
+            # the smoother L2 gradient, so it converges more slowly than
+            # Linear/Ridge. The defaults below (lr=0.01, 5000 iterations)
+            # were chosen so the from-scratch fit converges close to the
+            # sklearn LassoCV reference in the parallel notebook. With
+            # lr=0.001 and 500 iterations the fit is far from converged
+            # and the validation R^2 can go strongly negative.
             learning_rate = st.number_input(
                 "Learning rate   ",
                 min_value=0.0001,
                 max_value=1.0,
-                value=0.001,
+                value=0.01,
                 step=0.0001,
                 format="%.4f",
                 key="lasso_lr",
@@ -511,7 +518,7 @@ if df is not None:
                 "Gradient descent iterations   ",
                 min_value=10,
                 max_value=10000,
-                value=500,
+                value=5000,
                 step=10,
                 key="lasso_iter",
             )
