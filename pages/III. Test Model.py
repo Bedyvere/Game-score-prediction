@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from sklearn.model_selection import train_test_split
 
 
 SESSION_DATA_KEY = "game_df"
@@ -44,12 +43,13 @@ st.caption(
 
 
 def split_dataset(X, y, number, random_state=45):
-    return train_test_split(
-        X,
-        y,
-        test_size=number / 100,
-        random_state=random_state,
-    )
+    rng = np.random.default_rng(random_state)
+    n = len(X)
+    indices = rng.permutation(n)
+    val_size = int(np.round(n * number / 100))
+    val_idx = indices[:val_size]
+    train_idx = indices[val_size:]
+    return X[train_idx], X[val_idx], y[train_idx], y[val_idx]
 
 
 def flatten(values):
@@ -165,14 +165,10 @@ def build_train_state_from_dataset(df):
         index=numeric_columns.index(default_target),
         key="fallback_target",
     )
-    leakage_features = {"Metacritic", "IGN", "GameSpot", "Destructoid"}
-    safe_fallback_options = [
-        column for column in numeric_columns if column != target and column not in leakage_features
-    ]
     features = st.multiselect(
         "Select numeric features",
-        options=safe_fallback_options,
-        default=safe_fallback_options[:4],
+        options=[column for column in numeric_columns if column != target],
+        default=[column for column in numeric_columns if column != target][:4],
         key="fallback_features",
     )
     split_pct = st.slider(
