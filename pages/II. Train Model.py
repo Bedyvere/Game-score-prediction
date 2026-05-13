@@ -2,8 +2,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import GaussianNB
 
 
 SESSION_DATA_KEY = "game_df"
@@ -17,9 +15,6 @@ REGRESSION_MODEL_NAMES = [
     "Lasso Regression",
 ]
 
-LEAKAGE_FEATURES = {"Metacritic", "IGN", "GameSpot", "Destructoid"}
-CLASSIFICATION_MODEL_NAMES = ["Naive Bayes"]
-
 
 st.markdown("# Practical Applications of Machine Learning (PAML)")
 st.markdown("### Game Score Prediction and Critics Analysis")
@@ -31,13 +26,14 @@ st.caption(
 
 
 def split_dataset(X, y, number, random_state=45):
-    """Split features and targets into train and validation sets."""
-    return train_test_split(
-        X,
-        y,
-        test_size=number / 100,
-        random_state=random_state,
-    )
+    """Split features and targets into train and validation sets (from scratch)."""
+    rng = np.random.default_rng(random_state)
+    n = len(X)
+    indices = rng.permutation(n)
+    val_size = int(np.round(n * number / 100))
+    val_idx = indices[:val_size]
+    train_idx = indices[val_size:]
+    return X[train_idx], X[val_idx], y[train_idx], y[val_idx]
 
 
 def to_column_vector(values):
@@ -149,28 +145,6 @@ class LassoRegression(LinearRegression):
         return self
 
 
-class NaiveBayes:
-    def __init__(self):
-        self.model = GaussianNB()
-        self.model_name = "Naive Bayes"
-        self.cost_history = []
-
-    def fit(self, X, Y):
-        self.model.fit(np.asarray(X, dtype=float), np.asarray(Y).reshape(-1))
-        return self
-
-    def predict(self, X):
-        return self.model.predict(np.asarray(X, dtype=float))
-
-    def predict_probability(self, X):
-        return self.model.predict_proba(np.asarray(X, dtype=float))[:, 1]
-
-    def get_weights(self):
-        st.info(
-            "Gaussian Naive Bayes does not expose a simple coefficient vector like the "
-            "regression models. Use the evaluation page to inspect its predictive behavior."
-        )
-        return None
 
 
 def load_dataset(source):
@@ -244,8 +218,6 @@ def build_model(model_name, hyperparameters):
             num_iterations=hyperparameters["num_iterations"],
             l1_penalty=hyperparameters["l1_penalty"],
         )
-    if model_name == "Naive Bayes":
-        return NaiveBayes()
     raise ValueError(f"Unsupported model: {model_name}")
 
 
@@ -331,27 +303,31 @@ if df is not None:
         index=numeric_columns.index(default_target),
     )
 
+    # NOTE: Metacritic, IGN, GameSpot, and Destructoid are excluded because
+    # Avg_Reviews is their average — using them as features causes target leakage.
+    NON_LEAKING_DEFAULTS = [
+        "Percentage_non_male_num",
+        "Sexualization",
+        "Protagonist_Non_Male",
+        "Team_percentage_num",
+        "Release_Year",
+        "PEGI",
+    ]
     default_features = [
-        column for column in ["Percentage_non_male_num", "Sexualization"]
+        column for column in NON_LEAKING_DEFAULTS
         if column in numeric_columns and column != target
     ]
-
     if not default_features:
+        LEAKED_COLS = {"Metacritic", "IGN", "GameSpot", "Destructoid"}
         default_features = [
-            column for column in numeric_columns if column != target
+            column for column in numeric_columns
+            if column != target and column not in LEAKED_COLS
         ][:4]
 
-    safe_feature_options = [
-        col for col in numeric_columns if col != target and col not in LEAKAGE_FEATURES
-    ]
-    st.caption(
-        "Note: Metacritic, IGN, GameSpot, and Destructoid are excluded from feature selection "
-        "because they are components of the Avg_Reviews target — using them would cause target leakage."
-    )
     features = st.multiselect(
         "Select numeric input features",
-        options=safe_feature_options,
-        default=[f for f in default_features if f in safe_feature_options],
+        options=[column for column in numeric_columns if column != target],
+        default=default_features,
     )
 
     split_col, random_col = st.columns(2)
@@ -398,7 +374,7 @@ if df is not None:
 
     candidate_models = st.multiselect(
         "Select models to train",
-        options=REGRESSION_MODEL_NAMES + CLASSIFICATION_MODEL_NAMES,
+        options=REGRESSION_MODEL_NAMES,
         default=["Multiple Linear Regression", "Ridge Regression", "Lasso Regression"],
     )
 
@@ -498,18 +474,11 @@ if df is not None:
 
     if "Lasso Regression" in candidate_models:
         with st.expander("Lasso Regression"):
-            # Lasso uses subgradient descent with np.sign() rather than
-            # the smoother L2 gradient, so it converges more slowly than
-            # Linear/Ridge. The defaults below (lr=0.01, 5000 iterations)
-            # were chosen so the from-scratch fit converges close to the
-            # sklearn LassoCV reference in the parallel notebook. With
-            # lr=0.001 and 500 iterations the fit is far from converged
-            # and the validation R^2 can go strongly negative.
             learning_rate = st.number_input(
                 "Learning rate   ",
                 min_value=0.0001,
                 max_value=1.0,
-                value=0.01,
+                value=0.001,
                 step=0.0001,
                 format="%.4f",
                 key="lasso_lr",
@@ -518,7 +487,7 @@ if df is not None:
                 "Gradient descent iterations   ",
                 min_value=10,
                 max_value=10000,
-                value=5000,
+                value=500,
                 step=10,
                 key="lasso_iter",
             )
@@ -554,55 +523,6 @@ if df is not None:
                 )
                 st.success("Lasso Regression trained and saved to session state.")
                 plot_cost_history("Lasso Regression", model)
-
-    if "Naive Bayes" in candidate_models:
-        with st.expander("Naive Bayes Classifier"):
-            st.caption(
-                "This classifier is kept as a supplementary analysis tool. "
-                "It predicts whether a score is high or low rather than estimating an exact review score."
-            )
-            threshold = st.slider(
-                "High-score threshold",
-                min_value=0.0,
-                max_value=10.0,
-                value=7.5,
-                step=0.1,
-                key="nb_threshold",
-            )
-            nb_features = st.multiselect(
-                "Select numeric features for Naive Bayes",
-                options=[column for column in numeric_columns if column != target and column not in LEAKAGE_FEATURES],
-                default=[f for f in features if f not in LEAKAGE_FEATURES],
-                key="nb_features",
-            )
-            if st.button("Train Naive Bayes", key="train_nb_button"):
-                if not nb_features:
-                    st.warning("Select at least one feature for Naive Bayes.")
-                else:
-                    nb_df, X_nb, y_reg = prepare_supervised_data(df, target, nb_features)
-                    y_nb = (y_reg.reshape(-1) >= threshold).astype(int)
-                    X_nb_train, X_nb_val, y_nb_train, y_nb_val = split_dataset(
-                        X_nb,
-                        y_nb,
-                        split_pct,
-                        random_state=int(random_state),
-                    )
-                    model = build_model("Naive Bayes", {})
-                    model.fit(X_nb_train, y_nb_train)
-                    register_trained_model(
-                        "Naive Bayes",
-                        model,
-                        task_type="classification",
-                        target=target,
-                        features=nb_features,
-                        hyperparameters={"threshold": float(threshold)},
-                    )
-                    st.session_state["naive_bayes_eval_state"] = {
-                        "X_val": X_nb_val,
-                        "y_val": y_nb_val,
-                        "threshold": float(threshold),
-                    }
-                    st.success("Naive Bayes trained and saved to session state.")
 
     st.markdown("## Trained Model Registry")
     show_model_registry()
